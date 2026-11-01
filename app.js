@@ -34,7 +34,8 @@
   }
 
   function fmtNum(n) {
-    return String(Math.round(DB.toNumber(n) * 10) / 10);
+    const r = Math.round(DB.toNumber(n) * 1000) / 1000;
+    return String(r);
   }
 
   function fmtAxis(n) {
@@ -201,10 +202,25 @@
   // ---------- 首页 ----------
   function rankStatus(s) { return s === 'out' ? 0 : (s === 'low' ? 1 : 2); }
 
+  // 预警线换算成「件」：按重量设时除以每件规格
+  function alertThresholdPieces(p) {
+    const t = DB.toNumber(p.alertThreshold);
+    if (p.alertUnit === 'weight' && DB.toNumber(p.spec) > 0) return DB.round3(t / DB.toNumber(p.spec));
+    return t;
+  }
+
+  // 预警线按什么单位显示
+  function alertThresholdText(p) {
+    if (p.alertUnit === 'weight' && DB.toNumber(p.spec) > 0) {
+      return fmtNum(DB.toNumber(p.alertThreshold)) + (p.specUnit || '克');
+    }
+    return fmtNum(DB.toNumber(p.alertThreshold)) + '件';
+  }
+
   function alertText(a) {
     const isMat = a.product.type === 'material';
     if (a.status === 'out') return isMat ? '已用完，请补货' : '已售罄，请尽快补货';
-    if (a.status === 'low') return '库存不足（剩 ' + a.product.stock + ' 件，低于警戒线）';
+    if (a.status === 'low') return '低于警戒线（警戒线 ' + alertThresholdText(a.product) + '）';
     if (a.status === 'soon') return '预计 ' + fmtNum(a.daysLeft) + ' 天后用完（约 ' + DB.formatCnDate(a.runOutDate) + '）';
     return '';
   }
@@ -299,14 +315,11 @@
   async function renderHome() {
     const el = document.getElementById('view-home');
     const date = reconcileDate || DB.todayStr();
-    const [settlement, consumptions, adjustments, products, preds, sales, purchases] = await Promise.all([
+    const [settlement, consumptions, adjustments, products] = await Promise.all([
       DB.getSettlement(date),
       DB.listConsumptions(),
       DB.listAdjustments(),
       DB.listProducts(),
-      DB.computePredictions(14),
-      DB.listSales(),
-      DB.listPurchases(),
     ]);
     const dayCons = consumptions.filter(function (c) { return c.date === date; });
     const usageByProduct = {};
@@ -321,17 +334,6 @@
     let cost = 0;
     dayCons.forEach(function (c) { cost += DB.toNumber(c.cost); });
     const profit = revenue - cost;
-
-    const alerts = preds.filter(function (p) { return p.status !== 'ok'; })
-      .sort(function (a, b) {
-        return (rankStatus(a.status) - rankStatus(b.status)) || ((a.daysLeft === null ? 999 : a.daysLeft) - (b.daysLeft === null ? 999 : b.daysLeft));
-      });
-
-    const recents = sales.map(function (s) { return Object.assign({}, s, { type: 'sale' }); })
-      .concat(purchases.map(function (p) { return Object.assign({}, p, { type: 'purchase' }); }))
-      .concat(consumptions.map(function (c) { return Object.assign({}, c, { type: 'consume' }); }))
-      .sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); })
-      .slice(0, 6);
 
     el.innerHTML =
       '<div class="field" style="margin-bottom:12px"><label>核算日期</label><input type="date" id="rec-date" value="' + date + '"></div>' +
@@ -375,16 +377,7 @@
           }).join('') + '</div>'
         : '') +
       '<button class="btn btn-ghost btn-block" id="rec-adjust" style="margin-top:12px">⚖️ 盘点校正（改实际库存）</button>' +
-      '</div>' +
-
-      '<div class="section-head" style="margin-top:4px"><span class="t">库存预警</span><span class="badge ' + (alerts.length ? 'out' : 'ok') + '">' + alerts.length + ' 项</span></div>' +
-      (alerts.length
-        ? '<div class="list">' + alerts.slice(0, 8).map(alertRow).join('') + '</div>'
-        : '<div class="card"><div class="empty"><p>暂无库存预警 🎉</p></div></div>') +
-      '<div class="section-head" style="margin-top:16px"><span class="t">最近流水</span><button class="more" id="qa-all-records">查看全部</button></div>' +
-      (recents.length
-        ? '<div class="list">' + recents.map(recordRow).join('') + '</div>'
-        : '<div class="card"><div class="empty"><p>还没有流水</p></div></div>');
+      '</div>';
 
     el.querySelector('#rec-date').onchange = function (e) { reconcileDate = e.target.value; renderHome(); };
 
@@ -479,12 +472,6 @@
       if (!hasMaterials) { toast('请先添加原材料'); return; }
       openAdjustForm(null, date);
     };
-
-    el.querySelector('#qa-all-records').onclick = function () { openAllRecords(); };
-    el.querySelectorAll('[data-alert-product]').forEach(function (r) {
-      r.onclick = function () { openProductFormById(r.dataset.alertProduct); };
-    });
-    bindDeleteRecord(el, false);
   }
 
   // 成本栏：输入/加减后实时刷新该行的「金额」和「剩余库存」
@@ -498,15 +485,15 @@
     const mode = row.dataset.mode;
     const raw = DB.toNumber(row.querySelector('.cost-qty').value);
     let pieces = (mode === 'weight' && spec > 0) ? raw / spec : raw;
-    pieces = DB.round2(pieces);
+    pieces = DB.round3(pieces);
     const amount = DB.round2(pieces * cost);
-    const remaining = DB.round2(stock + savedUsed - pieces);
+    const remaining = DB.round3(stock + savedUsed - pieces);
     const amtEl = row.querySelector('.cost-amt');
     if (amtEl) amtEl.textContent = raw > 0 ? '¥' + fmtMoney(amount) : '';
     const remEl = row.querySelector('.cost-remaining');
     if (remEl) {
       let txt = fmtNum(Math.max(0, remaining)) + ' ' + remUnit;
-      if (spec > 0) txt += '（' + fmtNum(DB.round2(remaining * spec)) + specUnit + '）';
+      if (spec > 0) txt += '（' + fmtNum(DB.round3(remaining * spec)) + specUnit + '）';
       remEl.textContent = txt;
     }
   }
@@ -515,7 +502,7 @@
   function stockBadge(p) {
     const emptyLabel = p.type === 'material' ? '已用完' : '已售罄';
     if (p.stock <= 0) return '<span class="badge out">' + emptyLabel + '</span>';
-    if (p.alertThreshold !== null && p.alertThreshold !== undefined && p.stock <= p.alertThreshold) {
+    if (p.alertThreshold !== null && p.alertThreshold !== undefined && p.stock <= alertThresholdPieces(p)) {
       return '<span class="badge low">不足</span>';
     }
     return '<span class="badge ok">正常</span>';
@@ -575,12 +562,42 @@
     const products = await DB.listProducts();
     const list = productSearch ? products.filter(function (p) { return (p.name || '').indexOf(productSearch) !== -1; }) : products;
 
+    // 库存预警 + 最近流水（只在没搜索时显示在商品页下方）
+    let extrasHtml = '';
+    if (!productSearch) {
+      const [preds, sales, purchases, consumptions] = await Promise.all([
+        DB.computePredictions(14),
+        DB.listSales(),
+        DB.listPurchases(),
+        DB.listConsumptions(),
+      ]);
+      const alerts = preds.filter(function (p) { return p.status !== 'ok'; })
+        .sort(function (a, b) {
+          return (rankStatus(a.status) - rankStatus(b.status)) || ((a.daysLeft === null ? 999 : a.daysLeft) - (b.daysLeft === null ? 999 : b.daysLeft));
+        });
+      const recents = sales.map(function (s) { return Object.assign({}, s, { type: 'sale' }); })
+        .concat(purchases.map(function (p) { return Object.assign({}, p, { type: 'purchase' }); }))
+        .concat(consumptions.map(function (c) { return Object.assign({}, c, { type: 'consume' }); }))
+        .sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); })
+        .slice(0, 6);
+      extrasHtml =
+        '<div class="section-head" style="margin-top:4px"><span class="t">库存预警</span><span class="badge ' + (alerts.length ? 'out' : 'ok') + '">' + alerts.length + ' 项</span></div>' +
+        (alerts.length
+          ? '<div class="list">' + alerts.slice(0, 8).map(alertRow).join('') + '</div>'
+          : '<div class="card"><div class="empty"><p>暂无库存预警 🎉</p></div></div>') +
+        '<div class="section-head" style="margin-top:16px"><span class="t">最近流水</span><button class="more" id="qa-all-records">查看全部</button></div>' +
+        (recents.length
+          ? '<div class="list">' + recents.map(recordRow).join('') + '</div>'
+          : '<div class="card"><div class="empty"><p>还没有流水</p></div></div>');
+    }
+
     el.innerHTML =
       '<div class="field" style="margin-bottom:10px"><input id="product-search" type="search" placeholder="搜索商品名称" value="' + esc(productSearch) + '"></div>' +
       (list.length
         ? '<div class="list">' + list.map(productRow).join('') + '</div>'
         : '<div class="card"><div class="empty"><div class="empty-ico">📦</div><p>' + (products.length ? '没有找到匹配的商品' : '还没有商品，点下方按钮添加') + '</p></div></div>') +
-      '<button class="btn btn-primary btn-block btn-lg" id="add-product" style="margin-top:12px">＋ 新增商品</button>';
+      '<button class="btn btn-primary btn-block btn-lg" id="add-product" style="margin-top:12px">＋ 新增商品</button>' +
+      extrasHtml;
 
     const searchEl = el.querySelector('#product-search');
     searchEl.addEventListener('input', function (e) {
@@ -634,6 +651,15 @@
         purchaseEditingId = null; renderProducts();
       };
     }
+
+    if (!productSearch) {
+      const qa = el.querySelector('#qa-all-records');
+      if (qa) qa.onclick = function () { openAllRecords(); };
+      el.querySelectorAll('[data-alert-product]').forEach(function (r) {
+        r.onclick = function () { openProductFormById(r.dataset.alertProduct); };
+      });
+      bindDeleteRecord(el, false);
+    }
   }
 
   async function openProductFormById(id) {
@@ -655,6 +681,7 @@
 
     const curSpecUnit = product ? (product.specUnit || '克') : '克';
     const specUnitOptions = SPEC_UNITS.map(function (u) { return '<option value="' + u + '"' + (curSpecUnit === u ? ' selected' : '') + '>' + u + '</option>'; }).join('');
+    const curAlertUnit = (product && product.alertUnit === 'weight') ? 'weight' : 'piece';
 
     openModal(
       '<button class="modal-close" data-close>×</button>' +
@@ -673,10 +700,16 @@
       '<div class="field-row">' +
       '<div class="field"><label>单位</label><select name="unit" id="unit-select">' + unitOptions + '</select>' +
       '<div id="unit-custom-wrap" class="hidden" style="margin-top:6px"><input name="unitCustom" id="unit-custom" value="' + esc(unitIsCustom ? curUnit : '') + '" placeholder="自定义单位"></div></div>' +
-      '<div class="field"><label>库存预警线</label><input name="alertThreshold" type="number" inputmode="numeric" min="0" value="' + valOrEmpty(product && product.alertThreshold !== null ? product.alertThreshold : '') + '" placeholder="低于此数提醒"></div>' +
+      '<div class="field"><label>库存预警线</label>' +
+      '<div class="qty-toggle-row">' +
+      '<input name="alertThreshold" id="alert-threshold" type="number" inputmode="decimal" step="0.001" min="0" value="' + valOrEmpty(product && product.alertThreshold !== null ? product.alertThreshold : '') + '" placeholder="低于此数提醒">' +
+      '<select name="alertUnit" id="alert-unit" style="flex:0 0 auto;width:auto">' +
+      '<option value="piece"' + (curAlertUnit === 'piece' ? ' selected' : '') + '>件</option>' +
+      '<option value="weight"' + (curAlertUnit === 'weight' ? ' selected' : '') + '>按重量</option>' +
+      '</select></div></div>' +
       '</div>' +
       '<div class="field-row" id="spec-field">' +
-      '<div class="field"><label>规格（每件重量）</label><input name="spec" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(product && product.spec) + '" placeholder="如 250"></div>' +
+      '<div class="field"><label>规格（每件重量）</label><input name="spec" type="number" inputmode="decimal" step="0.001" min="0" value="' + valOrEmpty(product && product.spec) + '" placeholder="如 250"></div>' +
       '<div class="field"><label>规格单位</label><select name="specUnit">' + specUnitOptions + '</select></div>' +
       '</div>' +
       (isEdit ? '' : '<div class="field"><label>初始库存</label><input name="initStock" type="number" inputmode="numeric" min="0" value="0"><div class="hint">填了初始库存会自动记一条进货</div></div>') +
@@ -691,6 +724,7 @@
       });
       document.getElementById('sell-price-field').classList.toggle('hidden', curType === 'material');
       document.getElementById('spec-field').classList.toggle('hidden', curType !== 'material');
+      refreshAlertUnit();
     }
     document.querySelectorAll('#type-seg button').forEach(function (b) {
       b.onclick = function () { curType = b.dataset.t; refreshTypeUI(); };
@@ -704,6 +738,22 @@
       if (custom) document.getElementById('unit-custom').focus();
     }
     unitSel.onchange = refreshUnit;
+
+    const alertUnitSel = document.getElementById('alert-unit');
+    const specInput = document.querySelector('input[name="spec"]');
+    const specUnitSel = document.querySelector('select[name="specUnit"]');
+    function refreshAlertUnit() {
+      const specVal = DB.toNumber(specInput.value);
+      const specUnit = specUnitSel.value || '克';
+      const weightOpt = alertUnitSel.querySelector('option[value="weight"]');
+      const canWeight = curType === 'material' && specVal > 0;
+      weightOpt.disabled = !canWeight;
+      weightOpt.textContent = '按' + specUnit;
+      if (!canWeight && alertUnitSel.value === 'weight') alertUnitSel.value = 'piece';
+    }
+    specInput.addEventListener('input', refreshAlertUnit);
+    specUnitSel.addEventListener('change', refreshAlertUnit);
+
     refreshTypeUI();
     refreshUnit();
 
@@ -722,6 +772,7 @@
         sellPrice: curType === 'material' ? (product ? product.sellPrice : 0) : fd.get('sellPrice'),
         unit: unit,
         alertThreshold: fd.get('alertThreshold'),
+        alertUnit: fd.get('alertUnit'),
         spec: fd.get('spec'),
         specUnit: fd.get('specUnit'),
       };
@@ -839,7 +890,7 @@
       '<div class="field"><label>原材料 *</label><select name="productId" id="consume-product">' + options + '</select></div>' +
       '<div class="field"><label id="consume-qty-label">用量（件）*</label>' +
       '<div class="qty-toggle-row">' +
-      '<input name="quantity" id="consume-qty" type="number" inputmode="decimal" step="0.01" min="0" required value="1">' +
+      '<input name="quantity" id="consume-qty" type="number" inputmode="decimal" step="0.001" min="0" required value="1">' +
       '<div class="mini-seg" id="consume-mode" style="margin:0">' +
       '<button type="button" data-mode="piece" class="active">件</button>' +
       '<button type="button" data-mode="weight">克</button>' +
@@ -929,9 +980,9 @@
         '</div>'
       : '';
     let remText = fmtNum(remaining) + ' ' + remUnit;
-    if (hasSpec) remText += '（' + fmtNum(DB.round2(remaining * spec)) + specUnit + '）';
+    if (hasSpec) remText += '（' + fmtNum(DB.round3(remaining * spec)) + specUnit + '）';
     let displayVal = '';
-    if (used > 0) displayVal = (hasSpec && mode === 'weight') ? DB.round2(used * spec) : used;
+    if (used > 0) displayVal = (hasSpec && mode === 'weight') ? DB.round3(used * spec) : used;
     return '<div class="list-item cost-row" data-id="' + p.id + '" data-mode="' + mode + '"' +
       ' data-cost="' + unitCost + '" data-spec="' + spec + '" data-specunit="' + esc(specUnit) + '" data-remunit="' + esc(remUnit) + '"' +
       ' data-stock="' + remaining + '" data-used="' + used + '">' +
@@ -943,7 +994,7 @@
       '<div class="cost-side">' +
       '<div class="cost-input-wrap">' +
       '<button type="button" class="cost-step" data-step="-1">−</button>' +
-      '<input type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" class="cost-qty" value="' + displayVal + '">' +
+      '<input type="number" inputmode="decimal" step="0.001" min="0" placeholder="0" class="cost-qty" value="' + displayVal + '">' +
       '<button type="button" class="cost-step" data-step="1">＋</button>' +
       '<span class="cost-unit">' + esc(displayUnit) + '</span>' +
       '</div>' +
@@ -971,7 +1022,7 @@
       '<button type="button" data-mode="piece" class="active">按件</button>' +
       '<button type="button" data-mode="weight">按克</button>' +
       '</div></div>' +
-      '<div class="field"><label id="adjust-qty-label">实际剩余（件）*</label><input name="actualQty" id="adjust-qty" type="number" inputmode="decimal" step="0.01" min="0" required></div>' +
+      '<div class="field"><label id="adjust-qty-label">实际剩余（件）*</label><input name="actualQty" id="adjust-qty" type="number" inputmode="decimal" step="0.001" min="0" required></div>' +
       '<div class="field"><label>日期</label><input name="date" type="date" value="' + (presetDate || DB.todayStr()) + '"></div>' +
       '<div class="field"><label>备注</label><input name="note" placeholder="如：称重校正"></div>' +
       '<div class="hint" style="margin-bottom:12px">只改库存数字，不会计入当天成本</div>' +
@@ -1424,9 +1475,9 @@
       '<h3>使用说明</h3>' +
       '<div style="font-size:14px;color:var(--ink-2);line-height:1.9">' +
       '<p style="margin:0 0 8px"><strong>1. 每日利润核算（重要）</strong><br>就在「首页」直接填：先填带出现金（出门带的钱）、微信收款、支付宝收款、带回现金（收摊剩的钱）（现金收入 = 带回 − 带出）。带出现金可以点旁边的「单独保存」先单独记。再到「成本」一栏在每个商品后面的框里填今天用掉/卖掉的数量，点「保存成本」，系统自动算营业额、成本、利润。</p>' +
-      '<p style="margin:0 0 8px"><strong>2. 商品 / 进货 / 成本</strong><br>到「商品」添加商品：成品填进价+售价，原材料填进价、可选填「规格」（每件克重）。点商品行的「进」直接在那行改数量进货（选「使用账户」现金/微信/支付宝，会自动从对应账户扣钱），不用弹窗；「卖」「用」也能直接记。成本栏会列出所有商品，填用量即按进价算成本、显示金额和剩余库存，并自动扣库存。</p>' +
+      '<p style="margin:0 0 8px"><strong>2. 商品 / 进货 / 成本</strong><br>到「商品」添加商品：成品填进价+售价，原材料填进价、可选填「规格」（每件克重）。「库存预警线」可以按件、也可以按重量（克/斤等）设。点商品行的「进」直接在那行改数量进货（选「使用账户」现金/微信/支付宝，会自动从对应账户扣钱），不用弹窗；「卖」「用」也能直接记。成本栏会列出所有商品，填用量即按进价算成本、显示金额和剩余库存，并自动扣库存。「商品」页下方有库存预警和最近流水。</p>' +
       '<p style="margin:0 0 8px"><strong>3. 钱包 / 资金记录</strong><br>「钱包」页把现金、微信、支付宝三个账户分开记余额：收款收入进对应账户、进货从所选账户扣钱，还能「记一笔」手动记（比如初始现金）。每笔资金流水都记了操作时间（精确到秒）。</p>' +
-      '<p style="margin:0 0 8px"><strong>4. 利润 / 统计</strong><br>利润 = 营业额 − 成本。营业额 = 微信 + 支付宝 + 现金，首页填完实时显示。记错了到「最近流水」点「删」（或「查看全部」）撤销，进货/卖货/消耗的库存会自动改回去。「统计」里看每天的营业额、成本、利润趋势，以及「卖得最好的商品」。</p>' +
+      '<p style="margin:0 0 8px"><strong>4. 利润 / 统计</strong><br>利润 = 营业额 − 成本。营业额 = 微信 + 支付宝 + 现金，首页填完实时显示。记错了到「商品」页下方的「最近流水」点「删」（或「查看全部」）撤销，进货/卖货/消耗的库存会自动改回去。「统计」里看每天的营业额、成本、利润趋势，以及「卖得最好的商品」。</p>' +
       '<p style="margin:0 0 8px"><strong>5. 两台手机同步</strong><br>手机A「设置 → 导出备份」得到一个文件 → 用微信发给手机B → 手机B「设置 → 导入备份」选那个文件即可。导入前会自动留一份可撤销的快照。</p>' +
       '<p style="margin:0 0 8px"><strong>6. 备份</strong><br>数据只存在本机，建议定期导出备份存到微信收藏或云盘，防止换手机或误删。</p>' +
       '<p style="margin:0"><strong>7. 密码</strong><br>在「设置 → 设置密码」可加一把打开密码。</p>' +

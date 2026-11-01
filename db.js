@@ -72,6 +72,11 @@
     return Math.round(toNumber(n) * 100) / 100;
   }
 
+  // 数量/克重/规格等允许三位小数（金额仍用 round2 保留两位）
+  function round3(n) {
+    return Math.round(toNumber(n) * 1000) / 1000;
+  }
+
   function startOfDay(d) {
     const x = new Date(d);
     x.setHours(0, 0, 0, 0);
@@ -188,6 +193,8 @@
       p.spec = null;
       p.specUnit = '';
     }
+    // 库存预警线单位：默认「件」；只有原材料且填了规格（每件克重）才能按重量设
+    p.alertUnit = (p.alertUnit === 'weight' && p.type === 'material' && toNumber(p.spec) > 0) ? 'weight' : 'piece';
     p.updatedAt = Date.now();
     await put('products', p);
     return p;
@@ -281,7 +288,7 @@
     await removeOne('sales', id);
     const product = await getProduct(rec.productId);
     if (product) {
-      product.stock = round2(toNumber(product.stock) + toNumber(rec.quantity));
+      product.stock = round3(toNumber(product.stock) + toNumber(rec.quantity));
       product.updatedAt = Date.now();
       await put('products', product);
     }
@@ -303,7 +310,7 @@
     }
     const product = await getProduct(rec.productId);
     if (product) {
-      product.stock = round2(toNumber(product.stock) - toNumber(rec.quantity));
+      product.stock = round3(toNumber(product.stock) - toNumber(rec.quantity));
       product.updatedAt = Date.now();
       await put('products', product);
     }
@@ -324,7 +331,7 @@
     if (useWeight) {
       specUnit = String(product.specUnit || '克');
       weightQty = rawQty;               // 用户填的克数
-      quantity = round2(rawQty / spec); // 换算成件数
+      quantity = round3(rawQty / spec); // 换算成件数
     } else {
       quantity = rawQty;
     }
@@ -349,7 +356,7 @@
       createdAt: Date.now(),
     };
     await put('consumptions', rec);
-    product.stock = round2(toNumber(product.stock) - quantity);
+    product.stock = round3(toNumber(product.stock) - quantity);
     product.updatedAt = Date.now();
     await put('products', product);
     return rec;
@@ -366,7 +373,7 @@
     await removeOne('consumptions', id);
     const product = await getProduct(rec.productId);
     if (product) {
-      product.stock = round2(toNumber(product.stock) + toNumber(rec.quantity));
+      product.stock = round3(toNumber(product.stock) + toNumber(rec.quantity));
       product.updatedAt = Date.now();
       await put('products', product);
     }
@@ -386,7 +393,7 @@
     if (useWeight) {
       specUnit = String(product.specUnit || '克');
       weightQty = rawQty;
-      quantity = round2(rawQty / spec);
+      quantity = round3(rawQty / spec);
     } else {
       quantity = rawQty;
     }
@@ -396,7 +403,7 @@
     const todays = all.filter(function (c) { return c.productId === product.id && c.date === date; });
     const curSum = todays.reduce(function (s, c) { return s + toNumber(c.quantity); }, 0);
 
-    const restoredStock = round2(toNumber(product.stock) + curSum);
+    const restoredStock = round3(toNumber(product.stock) + curSum);
     if (quantity > restoredStock) {
       throw new Error('库存不足（当前库存 ' + restoredStock + ' 件）');
     }
@@ -424,7 +431,7 @@
         createdAt: Date.now(),
       };
       await put('consumptions', rec);
-      newStock = round2(newStock - quantity);
+      newStock = round3(newStock - quantity);
     }
     product.stock = newStock;
     product.updatedAt = Date.now();
@@ -487,10 +494,10 @@
     const spec = toNumber(product.spec);
     const useWeight = (o.mode === 'weight') && spec > 0;
     let after;
-    if (useWeight) after = round2(toNumber(o.actualQty) / spec);
+    if (useWeight) after = round3(toNumber(o.actualQty) / spec);
     else after = toNumber(o.actualQty);
     if (after < 0) throw new Error('数量不能为负');
-    const delta = round2(after - before);
+    const delta = round3(after - before);
     const rec = {
       id: uid(),
       productId: product.id,
@@ -577,8 +584,12 @@
       // 状态判定：用完/售罄 > 低于警戒线 > 预计快用完
       let status = 'ok';
       const threshold = p.alertThreshold;
+      // 预警线若按重量设，先换算成件数再比较
+      const thresholdPieces = (p.alertUnit === 'weight' && toNumber(p.spec) > 0)
+        ? round3(toNumber(threshold) / toNumber(p.spec))
+        : toNumber(threshold);
       if (stock <= 0) status = 'out';
-      else if (threshold !== null && threshold !== undefined && stock <= threshold) status = 'low';
+      else if (threshold !== null && threshold !== undefined && stock <= thresholdPieces) status = 'low';
       else if (daysLeft !== null && daysLeft <= 3) status = 'soon';
 
       return {
@@ -698,6 +709,7 @@
     uid: uid,
     toNumber: toNumber,
     round2: round2,
+    round3: round3,
     startOfDay: startOfDay,
     localDateStr: localDateStr,
     todayStr: todayStr,
