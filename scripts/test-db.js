@@ -224,6 +224,27 @@ function assert(cond, msg) {
   const sold = await DB.saveProduct({ name: '饰品', type: 'sellable', costPrice: 1, sellPrice: 2, unit: '个', alertThreshold: 5, alertUnit: 'weight' });
   assert(sold.alertUnit === 'piece', '成品强制按件设预警线（忽略 weight）');
 
+  console.log('== 删除资金流水 ==');
+  await DB.addFund({ account: 'cash', amount: 50, note: '临时记账', date: '2026-11-02' });
+  const tmpFund = (await DB.listFunds()).find(function (f) { return f.note === '临时记账'; });
+  await DB.deleteFund(tmpFund.id);
+  assert(!(await DB.listFunds()).find(function (f) { return f.note === '临时记账'; }), '删除手动记账');
+
+  const pDel = await DB.saveProduct({ name: '删除进货测试', type: 'material', costPrice: 3, unit: '件' });
+  await DB.addPurchase({ productId: pDel.id, quantity: 7, totalCost: 21, account: 'alipay' });
+  const pFund = (await DB.listFunds()).find(function (f) { return f.category === 'purchase' && (f.note || '').indexOf('删除进货测试') !== -1; });
+  assert(pFund && DB.toNumber((await DB.getProduct(pDel.id)).stock) === 7, '准备：进货后库存7、有扣款记录');
+  await DB.deleteFund(pFund.id);
+  assert(DB.toNumber((await DB.getProduct(pDel.id)).stock) === 0, '删进货支出会恢复库存');
+  assert(!(await DB.listFunds()).find(function (f) { return f.category === 'purchase' && f.refId === pFund.refId; }), '删进货支出会撤销扣款');
+  assert(!(await DB.listPurchases()).find(function (p) { return p.id === pFund.refId; }), '删进货支出会删除进货记录');
+
+  await DB.saveSettlement({ date: '2026-11-03', cashOut: 50, cashBack: 100, wechat: 80, alipay: 20 });
+  const wxFund = (await DB.listFunds()).find(function (f) { return f.category === 'settlement' && f.date === '2026-11-03' && f.account === 'wechat'; });
+  await DB.deleteFund(wxFund.id);
+  assert(DB.toNumber((await DB.getSettlement('2026-11-03')).wechat) === 0, '删微信收款会清空当天微信营业额');
+  assert(!(await DB.listFunds()).find(function (f) { return f.category === 'settlement' && f.date === '2026-11-03' && f.account === 'wechat'; }), '删微信收款后资金流水无微信收款');
+
   console.log(failures === 0 ? '\n✅ 全部通过' : '\n❌ 有 ' + failures + ' 个失败');
   process.exit(failures === 0 ? 0 : 1);
 })();

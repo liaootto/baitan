@@ -547,6 +547,32 @@
     return rec;
   }
 
+  // 删除一条资金流水：按来源分别处理，保证钱包和进货/营业额保持一致
+  async function deleteFund(id) {
+    const f = await getOne('funds', id);
+    if (!f) return;
+    if (f.category === 'purchase' && f.refId) {
+      // 进货支出：撤销整条进货（库存加回、扣款撤销、进货记录一并删除）
+      await deletePurchase(f.refId);
+      return;
+    }
+    if (f.category === 'settlement' && f.date) {
+      // 收款收入：清掉当天该账户的收款，并重写营业额（钱包和首页保持一致）
+      const st = await getSettlement(f.date);
+      if (st) {
+        if (f.account === 'wechat') st.wechat = 0;
+        else if (f.account === 'alipay') st.alipay = 0;
+        else if (f.account === 'cash') { st.cashBack = st.cashOut; }
+        await saveSettlement(st);
+      } else {
+        await removeOne('funds', id);
+      }
+      return;
+    }
+    // 手动记账等：直接删除
+    await removeOne('funds', id);
+  }
+
   // ---------- 库存预警 / 预测 ----------
 
   // 预测每件商品“预计几天后卖完”。windowDays：用最近多少天的销量来算平均。
@@ -740,6 +766,7 @@
     listAdjustments: listAdjustments,
     listFunds: listFunds,
     addFund: addFund,
+    deleteFund: deleteFund,
     computePredictions: computePredictions,
     exportBackup: exportBackup,
     importBackup: importBackup,

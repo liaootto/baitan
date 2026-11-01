@@ -1084,7 +1084,24 @@
       '<div class="sub">' + cat + ' · ' + esc(f.date) + ' · ' + fmtDateTime(f.createdAt) + '</div>' +
       '</div>' +
       '<div class="amount ' + cls + '">' + sign + '¥' + fmtMoney(Math.abs(DB.toNumber(f.amount))) + '</div>' +
+      '<button class="btn btn-danger" data-del-fund="' + f.id + '" data-cat="' + (f.category || '') + '" style="padding:6px 11px;font-size:13px">删</button>' +
       '</div>';
+  }
+
+  function bindDeleteFund(container) {
+    container.querySelectorAll('[data-del-fund]').forEach(function (b) {
+      b.onclick = function () {
+        const cat = b.dataset.cat;
+        let msg = '删除这条资金记录？';
+        if (cat === 'purchase') msg = '这会撤销整条进货：库存会加回、钱包扣款也撤销。确定吗？';
+        else if (cat === 'settlement') msg = '删除这条收款？首页对应的营业额那一项也会一起清掉。确定吗？';
+        showConfirm(msg, async function () {
+          await DB.deleteFund(b.dataset.delFund);
+          toast('已删除');
+          renderWallet(); renderHome(); renderProducts(); renderStats();
+        });
+      };
+    });
   }
 
   async function renderWallet() {
@@ -1115,6 +1132,7 @@
         : '<div class="card"><div class="empty"><p>还没有资金记录</p></div></div>');
 
     el.querySelector('#fund-add').onclick = function () { openFundForm(); };
+    bindDeleteFund(el);
   }
 
   function openFundForm() {
@@ -1440,7 +1458,7 @@
   function doImport() {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.json,application/json';
+    input.accept = '*/*';
     input.onchange = function (e) {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
@@ -1478,7 +1496,7 @@
       '<p style="margin:0 0 8px"><strong>2. 商品 / 进货 / 成本</strong><br>到「商品」添加商品：成品填进价+售价，原材料填进价、可选填「规格」（每件克重）。「库存预警线」可以按件、也可以按重量（克/斤等）设。点商品行的「进」直接在那行改数量进货（选「使用账户」现金/微信/支付宝，会自动从对应账户扣钱），不用弹窗；「卖」「用」也能直接记。成本栏会列出所有商品，填用量即按进价算成本、显示金额和剩余库存，并自动扣库存。「商品」页下方有库存预警和最近流水。</p>' +
       '<p style="margin:0 0 8px"><strong>3. 钱包 / 资金记录</strong><br>「钱包」页把现金、微信、支付宝三个账户分开记余额：收款收入进对应账户、进货从所选账户扣钱，还能「记一笔」手动记（比如初始现金）。每笔资金流水都记了操作时间（精确到秒）。</p>' +
       '<p style="margin:0 0 8px"><strong>4. 利润 / 统计</strong><br>利润 = 营业额 − 成本。营业额 = 微信 + 支付宝 + 现金，首页填完实时显示。记错了到「商品」页下方的「最近流水」点「删」（或「查看全部」）撤销，进货/卖货/消耗的库存会自动改回去。「统计」里看每天的营业额、成本、利润趋势，以及「卖得最好的商品」。</p>' +
-      '<p style="margin:0 0 8px"><strong>5. 两台手机同步</strong><br>手机A「设置 → 导出备份」得到一个文件 → 用微信发给手机B → 手机B「设置 → 导入备份」选那个文件即可。导入前会自动留一份可撤销的快照。</p>' +
+      '<p style="margin:0 0 8px"><strong>5. 两台手机同步</strong><br>手机A「设置 → 导出备份」得到一个文件 → 用微信发给手机B。手机B在微信里点开文件 → 右上角「…」→「保存到手机」（或「用其他应用打开」）→ 存到「下载 / Download」文件夹，再回本 app「设置 → 导入备份」选它。小米手机找不到文件时：导入里选「全部文件 / 下载」那个位置找，别在微信的隐藏目录里翻；也可以先把文件用文件管理器移到「下载」文件夹再导入。</p>' +
       '<p style="margin:0 0 8px"><strong>6. 备份</strong><br>数据只存在本机，建议定期导出备份存到微信收藏或云盘，防止换手机或误删。</p>' +
       '<p style="margin:0"><strong>7. 密码</strong><br>在「设置 → 设置密码」可加一把打开密码。</p>' +
       '</div>'
