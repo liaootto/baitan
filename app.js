@@ -697,16 +697,15 @@
       '<div class="field"><label>进价（元）</label><input name="costPrice" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(product ? product.costPrice : '') + '"></div>' +
       '<div class="field" id="sell-price-field"><label>售价（元）</label><input name="sellPrice" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(product ? product.sellPrice : '') + '"></div>' +
       '</div>' +
-      '<div class="field-row">' +
       '<div class="field"><label>单位</label><select name="unit" id="unit-select">' + unitOptions + '</select>' +
       '<div id="unit-custom-wrap" class="hidden" style="margin-top:6px"><input name="unitCustom" id="unit-custom" value="' + esc(unitIsCustom ? curUnit : '') + '" placeholder="自定义单位"></div></div>' +
       '<div class="field"><label>库存预警线</label>' +
-      '<div class="qty-toggle-row">' +
+      '<div class="alert-line">' +
       '<input name="alertThreshold" id="alert-threshold" type="number" inputmode="decimal" step="0.001" min="0" value="' + valOrEmpty(product && product.alertThreshold !== null ? product.alertThreshold : '') + '" placeholder="低于此数提醒">' +
-      '<select name="alertUnit" id="alert-unit" style="flex:0 0 auto;width:auto">' +
-      '<option value="piece"' + (curAlertUnit === 'piece' ? ' selected' : '') + '>件</option>' +
-      '<option value="weight"' + (curAlertUnit === 'weight' ? ' selected' : '') + '>按重量</option>' +
-      '</select></div></div>' +
+      '<div class="mini-seg" id="alert-unit-seg">' +
+      '<button type="button" data-u="piece" class="' + (curAlertUnit === 'piece' ? 'active' : '') + '">按件</button>' +
+      '<button type="button" data-u="weight" class="' + (curAlertUnit === 'weight' ? 'active' : '') + '">按克</button>' +
+      '</div></div>' +
       '</div>' +
       '<div class="field-row" id="spec-field">' +
       '<div class="field"><label>规格（每件重量）</label><input name="spec" type="number" inputmode="decimal" step="0.001" min="0" value="' + valOrEmpty(product && product.spec) + '" placeholder="如 250"></div>' +
@@ -739,18 +738,29 @@
     }
     unitSel.onchange = refreshUnit;
 
-    const alertUnitSel = document.getElementById('alert-unit');
     const specInput = document.querySelector('input[name="spec"]');
     const specUnitSel = document.querySelector('select[name="specUnit"]');
+    const alertSeg = document.getElementById('alert-unit-seg');
+    const alertSegBtns = alertSeg.querySelectorAll('button[data-u]');
+    let curAlertUnitValue = curAlertUnit;
     function refreshAlertUnit() {
       const specVal = DB.toNumber(specInput.value);
       const specUnit = specUnitSel.value || '克';
-      const weightOpt = alertUnitSel.querySelector('option[value="weight"]');
       const canWeight = curType === 'material' && specVal > 0;
-      weightOpt.disabled = !canWeight;
-      weightOpt.textContent = '按' + specUnit;
-      if (!canWeight && alertUnitSel.value === 'weight') alertUnitSel.value = 'piece';
+      const wb = alertSeg.querySelector('button[data-u="weight"]');
+      wb.disabled = !canWeight;
+      wb.textContent = '按' + specUnit;
+      wb.style.opacity = canWeight ? '' : '.4';
+      if (!canWeight && curAlertUnitValue === 'weight') curAlertUnitValue = 'piece';
+      alertSegBtns.forEach(function (b) { b.classList.toggle('active', b.dataset.u === curAlertUnitValue); });
     }
+    alertSegBtns.forEach(function (b) {
+      b.onclick = function () {
+        if (b.disabled) return;
+        curAlertUnitValue = b.dataset.u;
+        refreshAlertUnit();
+      };
+    });
     specInput.addEventListener('input', refreshAlertUnit);
     specUnitSel.addEventListener('change', refreshAlertUnit);
 
@@ -772,7 +782,7 @@
         sellPrice: curType === 'material' ? (product ? product.sellPrice : 0) : fd.get('sellPrice'),
         unit: unit,
         alertThreshold: fd.get('alertThreshold'),
-        alertUnit: fd.get('alertUnit'),
+        alertUnit: curAlertUnitValue,
         spec: fd.get('spec'),
         specUnit: fd.get('specUnit'),
       };
@@ -1418,6 +1428,7 @@
       '<label class="btn btn-secondary" for="import-file" style="margin:0">导入</label>' +
       '<input type="file" id="import-file" accept="*/*" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">' +
       '</div>' +
+      '<div class="list-item"><div class="main"><div class="title">粘贴备份内容（备用）</div><div class="sub">选文件没反应时用这个：把备份文件的文字粘贴进来</div></div><button class="btn btn-ghost" id="set-import-text">粘贴</button></div>' +
       (hasUndo ? '<div class="list-item"><div class="main"><div class="title">撤销上次导入</div><div class="sub">恢复到导入之前的数据</div></div><button class="btn btn-ghost" id="set-undo">撤销</button></div>' : '') +
       (lastBackup ? '<div class="list-item"><div class="main"><div class="title">上次导出</div><div class="sub">' + esc(new Date(lastBackup).toLocaleString('zh-CN')) + '</div></div></div>' : '') +
       '</div>' +
@@ -1437,6 +1448,7 @@
       '<p style="text-align:center;font-size:12px;color:var(--ink-3)">摆摊记账 · 数据只保存在本机</p>';
 
     el.querySelector('#set-export').onclick = doExport;
+    el.querySelector('#set-import-text').onclick = openImportText;
     const importInput = el.querySelector('#import-file');
     importInput.onchange = function (e) {
       const file = e.target.files && e.target.files[0];
@@ -1482,16 +1494,39 @@
     readText().then(function (text) {
       let json;
       try { json = JSON.parse(text); } catch (err) { throw new Error('文件不是本应用的备份（内容格式不对）'); }
-      showConfirm('导入会覆盖当前全部数据（导入前会自动留一份可撤销的快照），确定继续吗？', async function () {
-        try {
-          await DB.importBackup(json);
-          toast('导入成功');
-          renderSettings(); renderHome(); renderProducts(); renderStats();
-        } catch (err) { toast('导入失败：' + (err.message || '未知错误')); }
-      });
+      applyImportJson(json);
     }).catch(function (err) {
       toast('导入失败：' + (err.message || '文件无法读取'));
     });
+  }
+
+  function applyImportJson(json) {
+    showConfirm('导入会覆盖当前全部数据（导入前会自动留一份可撤销的快照），确定继续吗？', async function () {
+      try {
+        await DB.importBackup(json);
+        toast('导入成功');
+        renderSettings(); renderHome(); renderProducts(); renderStats();
+      } catch (err) { toast('导入失败：' + (err.message || '未知错误')); }
+    });
+  }
+
+  // 备用导入：不用选文件，直接粘贴备份文件里的文字（小米等手机选不了文件时用）
+  function openImportText() {
+    openModal(
+      '<button class="modal-close" data-close>×</button>' +
+      '<h3>粘贴备份内容</h3>' +
+      '<div class="hint" style="margin-bottom:8px">打开备份文件，把里面<b>全部文字</b>复制下来（一般以 { 开头），粘贴到下面的框里，再点「导入」。</div>' +
+      '<textarea id="import-text" rows="8" style="width:100%;font-size:12px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface);color:var(--ink);font-family:monospace" placeholder="在这里粘贴备份内容…"></textarea>' +
+      '<button class="btn btn-primary btn-block btn-lg" id="import-text-ok" style="margin-top:12px">导入</button>'
+    );
+    document.getElementById('import-text-ok').onclick = function () {
+      const text = document.getElementById('import-text').value.trim();
+      if (!text) { toast('请先把备份内容粘贴进来'); return; }
+      let json;
+      try { json = JSON.parse(text); } catch (err) { toast('内容不对，请确认复制的是完整备份'); return; }
+      closeModal();
+      applyImportJson(json);
+    };
   }
 
   async function doUndo() {
@@ -1511,7 +1546,8 @@
       '<p style="margin:0 0 8px"><strong>2. 商品 / 进货 / 成本</strong><br>到「商品」添加商品：成品填进价+售价，原材料填进价、可选填「规格」（每件克重）。「库存预警线」可以按件、也可以按重量（克/斤等）设。点商品行的「进」直接在那行改数量进货（选「使用账户」现金/微信/支付宝，会自动从对应账户扣钱），不用弹窗；「卖」「用」也能直接记。成本栏会列出所有商品，填用量即按进价算成本、显示金额和剩余库存，并自动扣库存。「商品」页下方有库存预警和最近流水。</p>' +
       '<p style="margin:0 0 8px"><strong>3. 钱包 / 资金记录</strong><br>「钱包」页把现金、微信、支付宝三个账户分开记余额：收款收入进对应账户、进货从所选账户扣钱，还能「记一笔」手动记（比如初始现金）。每笔资金流水都记了操作时间（精确到秒）。</p>' +
       '<p style="margin:0 0 8px"><strong>4. 利润 / 统计</strong><br>利润 = 营业额 − 成本。营业额 = 微信 + 支付宝 + 现金，首页填完实时显示。记错了到「商品」页下方的「最近流水」点「删」（或「查看全部」）撤销，进货/卖货/消耗的库存会自动改回去。「统计」里看每天的营业额、成本、利润趋势，以及「卖得最好的商品」。</p>' +
-      '<p style="margin:0 0 8px"><strong>5. 两台手机同步</strong><br>手机A「设置 → 导出备份」得到一个文件 → 用微信发给手机B。手机B在微信里点开文件 → 右上角「…」→「保存到手机」（或「用其他应用打开」）→ 存到「下载 / Download」文件夹，再回本 app「设置 → 导入备份」选它。小米手机找不到文件时：导入里选「全部文件 / 下载」那个位置找，别在微信的隐藏目录里翻；也可以先把文件用文件管理器移到「下载」文件夹再导入。</p>' +
+      '<p style="margin:0 0 8px"><strong>5. 两台手机同步</strong><br>手机A「设置 → 导出备份」得到一个文件 → 用微信发给手机B。手机B在微信里点开文件 → 右上角「…」→「保存到手机」→ 存到「下载 / Download」文件夹，再回本 app「设置 → 导入备份」选它。</p>' +
+      '<p style="margin:0 0 8px"><strong>5.1 小米等手机「导入」点不动怎么办</strong><br>用「设置 → 粘贴备份内容（备用）」：先用支持看文字的软件（如 WPS、记事本）打开那个备份文件，全选复制里面的全部文字，粘贴到 App 的框里，点导入。</p>' +
       '<p style="margin:0 0 8px"><strong>6. 备份</strong><br>数据只存在本机，建议定期导出备份存到微信收藏或云盘，防止换手机或误删。</p>' +
       '<p style="margin:0"><strong>7. 密码</strong><br>在「设置 → 设置密码」可加一把打开密码。</p>' +
       '</div>'
