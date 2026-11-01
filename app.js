@@ -1414,10 +1414,15 @@
       '<div class="card-title">数据备份与同步</div>' +
       '<div class="list">' +
       '<div class="list-item"><div class="main"><div class="title">导出备份</div><div class="sub">把全部数据存成一个文件，发微信同步到另一台手机</div></div><button class="btn btn-secondary" id="set-export">导出</button></div>' +
-      '<div class="list-item"><div class="main"><div class="title">导入备份</div><div class="sub">从文件恢复数据（会覆盖当前数据）</div></div><button class="btn btn-secondary" id="set-import">导入</button></div>' +
+      '<div class="list-item"><div class="main"><div class="title">导入备份</div><div class="sub">从文件恢复数据（会覆盖当前数据）</div></div>' +
+      '<label class="btn btn-secondary" for="import-file" style="margin:0">导入</label>' +
+      '<input type="file" id="import-file" accept="*/*" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">' +
+      '</div>' +
       (hasUndo ? '<div class="list-item"><div class="main"><div class="title">撤销上次导入</div><div class="sub">恢复到导入之前的数据</div></div><button class="btn btn-ghost" id="set-undo">撤销</button></div>' : '') +
       (lastBackup ? '<div class="list-item"><div class="main"><div class="title">上次导出</div><div class="sub">' + esc(new Date(lastBackup).toLocaleString('zh-CN')) + '</div></div></div>' : '') +
-      '</div></div>' +
+      '</div>' +
+      '<div class="hint" style="margin-top:8px">小米手机点「导入」没反应？请改用 Chrome 浏览器打开本网址再导入；文件建议存在手机「下载」文件夹里。</div>' +
+      '</div>' +
       '<div class="card">' +
       '<div class="card-title">安全</div>' +
       '<div class="list">' +
@@ -1432,7 +1437,15 @@
       '<p style="text-align:center;font-size:12px;color:var(--ink-3)">摆摊记账 · 数据只保存在本机</p>';
 
     el.querySelector('#set-export').onclick = doExport;
-    el.querySelector('#set-import').onclick = doImport;
+    const importInput = el.querySelector('#import-file');
+    importInput.onchange = function (e) {
+      const file = e.target.files && e.target.files[0];
+      // 清空，保证同一个文件再选一次也能触发
+      const reset = function () { try { importInput.value = ''; } catch (err) {} };
+      if (!file) { reset(); return; }
+      reset();
+      importFromFile(file);
+    };
     if (hasUndo) el.querySelector('#set-undo').onclick = doUndo;
     el.querySelector('#set-pin').onclick = function () { showPinSetup(true); };
     if (hasPin) el.querySelector('#set-lock').onclick = lock;
@@ -1455,28 +1468,30 @@
     renderSettings();
   }
 
-  function doImport() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '*/*';
-    input.onchange = function (e) {
-      const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      file.text().then(function (text) {
-        let json;
-        try { json = JSON.parse(text); } catch (err) { throw new Error('文件不是有效的 JSON'); }
-        showConfirm('导入会覆盖当前全部数据（导入前会自动留一份可撤销的快照），确定继续吗？', async function () {
-          try {
-            await DB.importBackup(json);
-            toast('导入成功');
-            renderSettings(); renderHome(); renderProducts(); renderStats();
-          } catch (err) { toast('导入失败：' + (err.message || '未知错误')); }
-        });
-      }).catch(function (err) {
-        toast('导入失败：' + (err.message || '文件无法读取'));
+  function importFromFile(file) {
+    toast('正在读取文件…');
+    const readText = function () {
+      if (file.text) return file.text();
+      return new Promise(function (resolve, reject) {
+        const fr = new FileReader();
+        fr.onload = function () { resolve(String(fr.result || '')); };
+        fr.onerror = function () { reject(new Error('文件无法读取')); };
+        fr.readAsText(file);
       });
     };
-    input.click();
+    readText().then(function (text) {
+      let json;
+      try { json = JSON.parse(text); } catch (err) { throw new Error('文件不是本应用的备份（内容格式不对）'); }
+      showConfirm('导入会覆盖当前全部数据（导入前会自动留一份可撤销的快照），确定继续吗？', async function () {
+        try {
+          await DB.importBackup(json);
+          toast('导入成功');
+          renderSettings(); renderHome(); renderProducts(); renderStats();
+        } catch (err) { toast('导入失败：' + (err.message || '未知错误')); }
+      });
+    }).catch(function (err) {
+      toast('导入失败：' + (err.message || '文件无法读取'));
+    });
   }
 
   async function doUndo() {
