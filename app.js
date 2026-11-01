@@ -1424,6 +1424,7 @@
       '<div class="card-title">数据备份与同步</div>' +
       '<div class="list">' +
       '<div class="list-item"><div class="main"><div class="title">导出备份</div><div class="sub">把全部数据存成一个文件，发微信同步到另一台手机</div></div><button class="btn btn-secondary" id="set-export">导出</button></div>' +
+      '<div class="list-item"><div class="main"><div class="title">直接发给另一台手机</div><div class="sub">弹出系统分享，选「互传 / AirDrop / 微信」发过去</div></div><button class="btn btn-secondary" id="set-share">发送</button></div>' +
       '<div class="list-item"><div class="main"><div class="title">导入备份</div><div class="sub">从文件恢复数据（会覆盖当前数据）</div></div>' +
       '<label class="btn btn-secondary" for="import-file" style="margin:0">导入</label>' +
       '<input type="file" id="import-file" accept="*/*" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">' +
@@ -1449,6 +1450,11 @@
 
     el.querySelector('#set-export').onclick = doExport;
     el.querySelector('#set-import-text').onclick = openImportText;
+
+    // 分享用的备份数据在打开设置时就准备好，点「发送」时才能立刻弹分享面板（否则有的手机不认）
+    let shareData = null;
+    DB.exportBackup().then(function (d) { shareData = d; }).catch(function () {});
+    el.querySelector('#set-share').onclick = function () { doShareBackup(shareData); };
     const importInput = el.querySelector('#import-file');
     importInput.onchange = function (e) {
       const file = e.target.files && e.target.files[0];
@@ -1478,6 +1484,34 @@
     await DB.setSetting('lastBackupAt', Date.now());
     toast('已导出备份，请保存好（可发微信收藏）');
     renderSettings();
+  }
+
+  // 直接调系统分享面板：iPhone 可 AirDrop「碰一碰」，小米/安卓可「互传」，也能选微信
+  function doShareBackup(data) {
+    if (!data) { toast('数据还在准备，请稍等一秒再点'); return; }
+    if (!navigator.share) {
+      toast('这个浏览器不支持直接发送，请用「导出」再发微信');
+      return;
+    }
+    const fileName = '摆摊账本备份-' + DB.todayStr() + '.json';
+    const text = JSON.stringify(data, null, 2);
+    let file = null;
+    try { file = new File([text], fileName, { type: 'application/json' }); } catch (err) { file = null; }
+    if (file && navigator.canShare && !navigator.canShare({ files: [file] })) {
+      toast('这个浏览器不能直接传文件，请用「导出」再发微信');
+      return;
+    }
+    const payload = file
+      ? { files: [file], title: '摆摊账本备份', text: '摆摊账本备份文件' }
+      : { title: '摆摊账本备份', text: text };
+    navigator.share(payload).then(function () {
+      DB.setSetting('lastBackupAt', Date.now());
+      toast('已发送');
+      renderSettings();
+    }).catch(function (err) {
+      if (err && err.name === 'AbortError') return;
+      toast('发送没成功：' + (err && err.message ? err.message : '可以改用「导出」'));
+    });
   }
 
   function importFromFile(file) {
@@ -1546,7 +1580,7 @@
       '<p style="margin:0 0 8px"><strong>2. 商品 / 进货 / 成本</strong><br>到「商品」添加商品：成品填进价+售价，原材料填进价、可选填「规格」（每件克重）。「库存预警线」可以按件、也可以按重量（克/斤等）设。点商品行的「进」直接在那行改数量进货（选「使用账户」现金/微信/支付宝，会自动从对应账户扣钱），不用弹窗；「卖」「用」也能直接记。成本栏会列出所有商品，填用量即按进价算成本、显示金额和剩余库存，并自动扣库存。「商品」页下方有库存预警和最近流水。</p>' +
       '<p style="margin:0 0 8px"><strong>3. 钱包 / 资金记录</strong><br>「钱包」页把现金、微信、支付宝三个账户分开记余额：收款收入进对应账户、进货从所选账户扣钱，还能「记一笔」手动记（比如初始现金）。每笔资金流水都记了操作时间（精确到秒）。</p>' +
       '<p style="margin:0 0 8px"><strong>4. 利润 / 统计</strong><br>利润 = 营业额 − 成本。营业额 = 微信 + 支付宝 + 现金，首页填完实时显示。记错了到「商品」页下方的「最近流水」点「删」（或「查看全部」）撤销，进货/卖货/消耗的库存会自动改回去。「统计」里看每天的营业额、成本、利润趋势，以及「卖得最好的商品」。</p>' +
-      '<p style="margin:0 0 8px"><strong>5. 两台手机同步</strong><br>手机A「设置 → 导出备份」得到一个文件 → 用微信发给手机B。手机B在微信里点开文件 → 右上角「…」→「保存到手机」→ 存到「下载 / Download」文件夹，再回本 app「设置 → 导入备份」选它。</p>' +
+      '<p style="margin:0 0 8px"><strong>5. 两台手机同步</strong><br>方法一（最省事）：手机A「设置 → 直接发给另一台手机」→ 系统分享面板里选「互传 / AirDrop / 附近分享」，或直接选微信发给对方；手机B接收后回到 App「设置 → 导入备份」。方法二：手机A「设置 → 导出备份」得到一个文件 → 用微信发给手机B。手机B在微信里点开文件 → 右上角「…」→「保存到手机」→ 存到「下载 / Download」文件夹，再回本 app「设置 → 导入备份」选它。</p>' +
       '<p style="margin:0 0 8px"><strong>5.1 小米等手机「导入」点不动怎么办</strong><br>用「设置 → 粘贴备份内容（备用）」：先用支持看文字的软件（如 WPS、记事本）打开那个备份文件，全选复制里面的全部文字，粘贴到 App 的框里，点导入。</p>' +
       '<p style="margin:0 0 8px"><strong>6. 备份</strong><br>数据只存在本机，建议定期导出备份存到微信收藏或云盘，防止换手机或误删。</p>' +
       '<p style="margin:0"><strong>7. 密码</strong><br>在「设置 → 设置密码」可加一把打开密码。</p>' +

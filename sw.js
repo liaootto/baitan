@@ -1,7 +1,7 @@
 /* 摆摊记账 —— Service Worker（离线缓存）
  * 更新 app 时把 CACHE_VERSION 加 1，用户下次联网打开会自动更新。
  */
-const CACHE_VERSION = 'v16';
+const CACHE_VERSION = 'v17';
 const CACHE_NAME = 'baitan-' + CACHE_VERSION;
 const ASSETS = [
   './',
