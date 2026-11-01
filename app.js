@@ -1425,6 +1425,7 @@
       '<div class="list">' +
       '<div class="list-item"><div class="main"><div class="title">导出备份</div><div class="sub">把全部数据存成一个文件，发微信同步到另一台手机</div></div><button class="btn btn-secondary" id="set-export">导出</button></div>' +
       '<div class="list-item"><div class="main"><div class="title">直接发给另一台手机</div><div class="sub">弹出系统分享，选「互传 / AirDrop / 微信」发过去</div></div><button class="btn btn-secondary" id="set-share">发送</button></div>' +
+      '<div class="list-item"><div class="main"><div class="title">显示备份文字（万能备用）</div><div class="sub">把备份变成一段文字，复制后用微信发给另一台手机</div></div><button class="btn btn-ghost" id="set-export-text">查看</button></div>' +
       '<div class="list-item"><div class="main"><div class="title">导入备份</div><div class="sub">从文件恢复数据（会覆盖当前数据）</div></div>' +
       '<label class="btn btn-secondary" for="import-file" style="margin:0">导入</label>' +
       '<input type="file" id="import-file" accept="*/*" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">' +
@@ -1450,6 +1451,7 @@
 
     el.querySelector('#set-export').onclick = doExport;
     el.querySelector('#set-import-text').onclick = openImportText;
+    el.querySelector('#set-export-text').onclick = openBackupText;
 
     // 分享用的备份数据在打开设置时就准备好，点「发送」时才能立刻弹分享面板（否则有的手机不认）
     let shareData = null;
@@ -1542,6 +1544,40 @@
         renderSettings(); renderHome(); renderProducts(); renderStats();
       } catch (err) { toast('导入失败：' + (err.message || '未知错误')); }
     });
+  }
+
+  // 万能备用：把备份显示成文字，能复制就能传（不依赖选文件、不依赖系统分享）
+  function openBackupText() {
+    toast('正在生成…');
+    DB.exportBackup().then(function (data) {
+      const text = JSON.stringify(data, null, 2);
+      openModal(
+        '<button class="modal-close" data-close>×</button>' +
+        '<h3>备份文字</h3>' +
+        '<div class="hint" style="margin-bottom:8px">点下面「复制全部」，用微信发给自己或另一台手机；对方在「粘贴备份内容（备用）」里粘进去就能导入。</div>' +
+        '<textarea id="backup-text" readonly rows="10" style="width:100%;font-size:11px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface);color:var(--ink);font-family:monospace">' + esc(text) + '</textarea>' +
+        '<button class="btn btn-primary btn-block" id="backup-text-copy" style="margin-top:10px">复制全部</button>'
+      );
+      const ta = document.getElementById('backup-text');
+      function legacyCopy() {
+        try {
+          ta.focus();
+          ta.select();
+          ta.setSelectionRange(0, ta.value.length);
+          const ok = document.execCommand('copy');
+          toast(ok ? '已复制' : '复制不了，请长按文字全选后手动复制');
+        } catch (err) {
+          toast('复制不了，请长按文字全选后手动复制');
+        }
+      }
+      document.getElementById('backup-text-copy').onclick = function () {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(ta.value).then(function () { toast('已复制'); }).catch(legacyCopy);
+        } else {
+          legacyCopy();
+        }
+      };
+    }).catch(function () { toast('生成失败，请重试'); });
   }
 
   // 备用导入：不用选文件，直接粘贴备份文件里的文字（小米等手机选不了文件时用）
