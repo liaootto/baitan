@@ -1434,7 +1434,7 @@
       (hasUndo ? '<div class="list-item"><div class="main"><div class="title">撤销上次导入</div><div class="sub">恢复到导入之前的数据</div></div><button class="btn btn-ghost" id="set-undo">撤销</button></div>' : '') +
       (lastBackup ? '<div class="list-item"><div class="main"><div class="title">上次导出</div><div class="sub">' + esc(new Date(lastBackup).toLocaleString('zh-CN')) + '</div></div></div>' : '') +
       '</div>' +
-      '<div class="hint" style="margin-top:8px">小米手机点「导入」没反应？请改用 Chrome 浏览器打开本网址再导入；文件建议存在手机「下载」文件夹里。</div>' +
+      '<div class="hint" style="margin-top:8px">小米手机点「导入」没反应？那是桌面图标的问题：用手机自带的浏览器打开 liaootto.github.io/baitan 再导入，数据是一样的，导完图标里也能看到。</div>' +
       '</div>' +
       '<div class="card">' +
       '<div class="card-title">安全</div>' +
@@ -1617,7 +1617,7 @@
       '<p style="margin:0 0 8px"><strong>3. 钱包 / 资金记录</strong><br>「钱包」页把现金、微信、支付宝三个账户分开记余额：收款收入进对应账户、进货从所选账户扣钱，还能「记一笔」手动记（比如初始现金）。每笔资金流水都记了操作时间（精确到秒）。</p>' +
       '<p style="margin:0 0 8px"><strong>4. 利润 / 统计</strong><br>利润 = 营业额 − 成本。营业额 = 微信 + 支付宝 + 现金，首页填完实时显示。记错了到「商品」页下方的「最近流水」点「删」（或「查看全部」）撤销，进货/卖货/消耗的库存会自动改回去。「统计」里看每天的营业额、成本、利润趋势，以及「卖得最好的商品」。</p>' +
       '<p style="margin:0 0 8px"><strong>5. 两台手机同步</strong><br>方法一（最省事）：手机A「设置 → 直接发给另一台手机」→ 系统分享面板里选「互传 / AirDrop / 附近分享」，或直接选微信发给对方；手机B接收后回到 App「设置 → 导入备份」。方法二：手机A「设置 → 导出备份」得到一个文件 → 用微信发给手机B。手机B在微信里点开文件 → 右上角「…」→「保存到手机」→ 存到「下载 / Download」文件夹，再回本 app「设置 → 导入备份」选它。</p>' +
-      '<p style="margin:0 0 8px"><strong>5.1 小米等手机「导入」点不动怎么办</strong><br>用「设置 → 粘贴备份内容（备用）」：先用支持看文字的软件（如 WPS、记事本）打开那个备份文件，全选复制里面的全部文字，粘贴到 App 的框里，点导入。</p>' +
+      '<p style="margin:0 0 8px"><strong>5.1 小米等手机「导入」点不动怎么办</strong><br>桌面图标那个窗口限制多，选文件用不了。用手机自带浏览器打开 liaootto.github.io/baitan 再导入即可——数据是和图标共用的，导完回去看都一样。实在不行再用「粘贴备份内容（备用）」：把备份文字的「显示备份文字」复制过来粘贴。</p>' +
       '<p style="margin:0 0 8px"><strong>6. 备份</strong><br>数据只存在本机，建议定期导出备份存到微信收藏或云盘，防止换手机或误删。</p>' +
       '<p style="margin:0"><strong>7. 密码</strong><br>在「设置 → 设置密码」可加一把打开密码。</p>' +
       '</div>'
