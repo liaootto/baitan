@@ -5,6 +5,8 @@
   'use strict';
 
   // ---------- 全局状态 ----------
+  // 版本号（和 sw.js 的 CACHE_VERSION 保持一致，改代码时两边一起加 1）
+  const APP_VERSION = 'v22';
   let currentTab = 'home';
   let unlocked = false;
   let productSearch = '';
@@ -1446,7 +1448,7 @@
       '<div class="list">' +
       '<div class="list-item"><div class="main"><div class="title">使用说明</div><div class="sub">怎么记账、怎么两台手机同步</div></div><button class="btn btn-ghost" id="set-help">查看</button></div>' +
       '</div></div>' +
-      '<p style="text-align:center;font-size:12px;color:var(--ink-3)">摆摊记账 · 数据只保存在本机</p>';
+      '<p style="text-align:center;font-size:12px;color:var(--ink-3)">摆摊记账 · 数据只保存在本机 · 版本 ' + APP_VERSION + '</p>';
 
     el.querySelector('#set-export').onclick = doExport;
     el.querySelector('#set-import-text').onclick = openImportText;
