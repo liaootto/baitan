@@ -237,7 +237,12 @@ main { flex: 1; padding: 14px 14px 20px; }
 }
 .field .hint { font-size: 12px; color: var(--ink-3); margin-top: 4px; }
 .field-row { display: flex; gap: 10px; }
-.field-row .field { flex: 1; }
+.field-row .field { flex: 1; min-width: 0; }
+
+/* 库存预警线：输入框 + 「按件/按克」小切换，并排且输入框占满剩余宽度 */
+.alert-line { display: flex; align-items: center; gap: 8px; }
+.alert-line input { flex: 1 1 auto; min-width: 0; width: auto; }
+.alert-line .mini-seg { flex: 0 0 auto; margin: 0; }
 
 /* ---------- 弹窗 ---------- */
 .modal-root {
@@ -390,6 +395,11 @@ main { flex: 1; padding: 14px 14px 20px; }
 }
 .cost-step:active { opacity: .7; }
 .cost-side { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
+
+/* 核算成本行：名称允许换行显示完整，不被右边的输入框挤成省略号 */
+.cost-row .main { flex: 1 1 auto; min-width: 0; }
+.cost-row .title { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.35; word-break: break-word; }
+.cost-row .sub { line-height: 1.4; }
 .cost-side .cost-amt { font-size: 13px; }
 .cost-amt { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--good); white-space: nowrap; }
 .qty-toggle-row { display: flex; align-items: center; gap: 8px; }
