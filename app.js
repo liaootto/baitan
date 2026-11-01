@@ -1424,7 +1424,7 @@
       '<div class="card-title">数据备份与同步</div>' +
       '<div class="list">' +
       '<div class="list-item"><div class="main"><div class="title">导出备份</div><div class="sub">把全部数据存成一个文件，发微信同步到另一台手机</div></div><button class="btn btn-secondary" id="set-export">导出</button></div>' +
-      '<div class="list-item"><div class="main"><div class="title">直接发给另一台手机</div><div class="sub">弹出系统分享，选「互传 / AirDrop / 微信」发过去</div></div><button class="btn btn-secondary" id="set-share">发送</button></div>' +
+      '<div class="list-item"><div class="main"><div class="title">直接发给另一台手机</div><div class="sub">手机支持时会弹出分享（互传 / AirDrop）；不支持就直接导出文件</div></div><button class="btn btn-secondary" id="set-share">发送</button></div>' +
       '<div class="list-item"><div class="main"><div class="title">显示备份文字（万能备用）</div><div class="sub">把备份变成一段文字，复制后用微信发给另一台手机</div></div><button class="btn btn-ghost" id="set-export-text">查看</button></div>' +
       '<div class="list-item"><div class="main"><div class="title">导入备份</div><div class="sub">从文件恢复数据（会覆盖当前数据）</div></div>' +
       '<label class="btn btn-secondary" for="import-file" style="margin:0">导入</label>' +
@@ -1488,32 +1488,33 @@
     renderSettings();
   }
 
-  // 直接调系统分享面板：iPhone 可 AirDrop「碰一碰」，小米/安卓可「互传」，也能选微信
+  // 直接调系统分享面板：iPhone 可 AirDrop「碰一碰」，安卓可「互传」。
+  // 浏览器不支持时自动退回「导出文件」，不让按钮白点。
   function doShareBackup(data) {
-    if (!data) { toast('数据还在准备，请稍等一秒再点'); return; }
-    if (!navigator.share) {
-      toast('这个浏览器不支持直接发送，请用「导出」再发微信');
-      return;
-    }
     const fileName = '摆摊账本备份-' + DB.todayStr() + '.json';
-    const text = JSON.stringify(data, null, 2);
+    const text = data ? JSON.stringify(data, null, 2) : '';
     let file = null;
-    try { file = new File([text], fileName, { type: 'application/json' }); } catch (err) { file = null; }
-    if (file && navigator.canShare && !navigator.canShare({ files: [file] })) {
-      toast('这个浏览器不能直接传文件，请用「导出」再发微信');
+    if (text) {
+      try { file = new File([text], fileName, { type: 'application/json' }); } catch (err) { file = null; }
+    }
+    const supported = !!navigator.share && !!file &&
+      (!navigator.canShare || navigator.canShare({ files: [file] }));
+    if (!supported) {
+      toast('这台手机不支持直接发送，已改为导出文件，请用微信发过去');
+      doExport();
       return;
     }
-    const payload = file
-      ? { files: [file], title: '摆摊账本备份', text: '摆摊账本备份文件' }
-      : { title: '摆摊账本备份', text: text };
-    navigator.share(payload).then(function () {
-      DB.setSetting('lastBackupAt', Date.now());
-      toast('已发送');
-      renderSettings();
-    }).catch(function (err) {
-      if (err && err.name === 'AbortError') return;
-      toast('发送没成功：' + (err && err.message ? err.message : '可以改用「导出」'));
-    });
+    navigator.share({ files: [file], title: '摆摊账本备份', text: '摆摊账本备份文件' })
+      .then(function () {
+        DB.setSetting('lastBackupAt', Date.now());
+        toast('已发送');
+        renderSettings();
+      })
+      .catch(function (err) {
+        if (err && err.name === 'AbortError') return;  // 自己取消了
+        toast('发送没成功，已改为导出文件');
+        doExport();
+      });
   }
 
   function importFromFile(file) {
