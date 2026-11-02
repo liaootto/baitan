@@ -218,9 +218,13 @@
       id: uid(),
       productId: product.id,
       productName: product.name,
+      productType: product.type,
       quantity: quantity,
+      unit: String(product.unit || '件'),
       unitCost: unitCost,
       totalCost: totalCost,
+      spec: (product.spec === null || product.spec === undefined) ? null : toNumber(product.spec),
+      specUnit: String(product.specUnit || ''),
       account: account,
       date: o.date || todayStr(),
       note: String(o.note || ''),
@@ -239,6 +243,7 @@
       createdAt: Date.now(),
     });
     product.stock = toNumber(product.stock) + quantity;
+    product.costPrice = unitCost; // 进价自动跟最近一次进货走，核算成本才准
     product.updatedAt = Date.now();
     await put('products', product);
     return rec;
@@ -262,7 +267,9 @@
       id: uid(),
       productId: product.id,
       productName: product.name,
+      productType: product.type,
       quantity: quantity,
+      unit: String(product.unit || '件'),
       unitPrice: unitPrice,
       unitCost: unitCost,
       totalAmount: totalAmount,
@@ -311,6 +318,12 @@
     const product = await getProduct(rec.productId);
     if (product) {
       product.stock = round3(toNumber(product.stock) - toNumber(rec.quantity));
+      // 若删的是最新一笔进货，进价回退到上一笔进货单价
+      const remaining = (await getAll('purchases')).filter(function (p) { return p.productId === rec.productId && p.id !== id; });
+      if (remaining.length) {
+        const latest = remaining.reduce(function (a, b) { return (b.createdAt || 0) > (a.createdAt || 0) ? b : a; });
+        product.costPrice = latest.unitCost;
+      }
       product.updatedAt = Date.now();
       await put('products', product);
     }
@@ -398,22 +411,37 @@
       quantity = rawQty;
     }
 
-    // 该商品当天已有的消耗总量
+    // 本次用的进价：优先用用户选的进货批次单价，否则用商品当前进价
+    let unitCost = toNumber(product.costPrice);
+    let costPurchaseId = null;
+    if (o.purchaseId) {
+      const purchase = await getOne('purchases', o.purchaseId);
+      if (purchase && purchase.productId === product.id) {
+        unitCost = toNumber(purchase.unitCost);
+        costPurchaseId = purchase.id;
+      }
+    }
+
+    // 只撤销「同一批次」的当天旧记录：指定批次就只改该批，未指定就只改无批次的那条。
+    // 这样不同进价的批次可以各自独立记用量、各自回补库存。
     const all = await getAll('consumptions');
     const todays = all.filter(function (c) { return c.productId === product.id && c.date === date; });
-    const curSum = todays.reduce(function (s, c) { return s + toNumber(c.quantity); }, 0);
+    const toRemove = todays.filter(function (c) {
+      if (o.purchaseId) return c.costPurchaseId === o.purchaseId;
+      return !c.costPurchaseId;
+    });
+    const removedSum = toRemove.reduce(function (s, c) { return s + toNumber(c.quantity); }, 0);
 
-    const restoredStock = round3(toNumber(product.stock) + curSum);
+    const restoredStock = round3(toNumber(product.stock) + removedSum);
     if (quantity > restoredStock) {
       throw new Error('库存不足（当前库存 ' + restoredStock + ' 件）');
     }
 
-    // 撤销当天旧记录，再按新数量记一条（或归零）
-    for (const c of todays) await removeOne('consumptions', c.id);
+    // 撤销该批的当天旧记录，再按新数量记一条（或归零）
+    for (const c of toRemove) await removeOne('consumptions', c.id);
 
     let newStock = restoredStock;
     if (quantity > 0) {
-      const unitCost = toNumber(product.costPrice);
       const cost = round2(unitCost * quantity);
       const rec = {
         id: uid(),
@@ -426,6 +454,7 @@
         spec: spec,
         unitCost: unitCost,
         cost: cost,
+        costPurchaseId: costPurchaseId,
         date: date,
         note: String(o.note || ''),
         createdAt: Date.now(),
@@ -547,6 +576,27 @@
     return rec;
   }
 
+  // 现金转出：把现金转到微信或支付宝（现金减少、目标账户增加，总额不变）。
+  // 记两条流水并用同一个 refId 关联，方便整组一起撤销。
+  async function transferCashOut(o) {
+    const amount = round2(toNumber(o.amount));
+    if (amount <= 0) throw new Error('金额必须大于 0');
+    const to = o.to;
+    if (to !== 'wechat' && to !== 'alipay') throw new Error('请选择转出到微信或支付宝');
+    const date = o.date || todayStr();
+    const refId = uid();
+    const targetName = to === 'wechat' ? '微信' : '支付宝';
+    await put('funds', {
+      id: uid(), account: 'cash', amount: round2(-amount), category: 'transfer',
+      refId: refId, date: date, note: '现金转出到' + targetName, createdAt: Date.now(),
+    });
+    await put('funds', {
+      id: uid(), account: to, amount: amount, category: 'transfer',
+      refId: refId, date: date, note: '现金转入', createdAt: Date.now(),
+    });
+    return refId;
+  }
+
   // 删除一条资金流水：按来源分别处理，保证钱包和进货/营业额保持一致
   async function deleteFund(id) {
     const f = await getOne('funds', id);
@@ -569,8 +619,136 @@
       }
       return;
     }
+    if (f.category === 'transfer' && f.refId) {
+      // 现金转出：把「现金减少」和「目标账户增加」两条一起删掉，恢复转账前余额
+      const funds = await getAll('funds');
+      for (const g of funds) {
+        if (g.category === 'transfer' && g.refId === f.refId) await removeOne('funds', g.id);
+      }
+      return;
+    }
     // 手动记账等：直接删除
     await removeOne('funds', id);
+  }
+
+  // 修改一条资金流水（只允许改安全字段）：保留 id、createdAt（时间不变）、category、refId。
+  async function updateFund(id, changes) {
+    const f = await getOne('funds', id);
+    if (!f) throw new Error('记录不存在');
+    if (changes.account !== undefined) f.account = changes.account;
+    if (changes.amount !== undefined) f.amount = round2(toNumber(changes.amount));
+    if (changes.date !== undefined) f.date = changes.date;
+    if (changes.note !== undefined) f.note = String(changes.note || '');
+    await put('funds', f);
+    return f;
+  }
+
+  // 修改一笔进货的总金额：只改金额和进价，不动库存数量；若是最新一笔进货，商品当前进价跟着变。
+  async function updatePurchaseAmount(id, newTotal) {
+    const rec = await getOne('purchases', id);
+    if (!rec) throw new Error('进货记录不存在');
+    const total = round2(toNumber(newTotal));
+    if (total < 0) throw new Error('金额不能为负');
+    const quantity = toNumber(rec.quantity);
+    rec.totalCost = total;
+    rec.unitCost = quantity > 0 ? round2(total / quantity) : 0;
+    await put('purchases', rec);
+    const product = await getProduct(rec.productId);
+    if (product) {
+      const all = await getAll('purchases');
+      const mine = all.filter(function (p) { return p.productId === rec.productId; });
+      const latest = mine.length ? mine.reduce(function (a, b) { return (b.createdAt || 0) > (a.createdAt || 0) ? b : a; }) : null;
+      if (latest && latest.id === rec.id) {
+        product.costPrice = rec.unitCost;
+        product.updatedAt = Date.now();
+        await put('products', product);
+      }
+    }
+    return rec;
+  }
+
+  // 修改一条资金流水的所有关键字段（账户/金额/日期/备注），并同步对应的源记录，
+  // 保证钱包和进货 / 营业额 / 转账保持一致；id、createdAt（时间）不变。
+  async function updateFundFull(id, o) {
+    const f = await getOne('funds', id);
+    if (!f) throw new Error('记录不存在');
+    const account = (o.account !== undefined && o.account !== null) ? o.account : f.account;
+    const amount = (o.amount !== undefined && o.amount !== null) ? round2(toNumber(o.amount)) : round2(toNumber(f.amount));
+    const date = (o.date !== undefined && o.date !== null) ? o.date : f.date;
+    const note = (o.note !== undefined) ? String(o.note || '') : String(f.note || '');
+
+    // 进货支出：同步进货记录（账户、金额→进价、日期），库存数量不动
+    if (f.category === 'purchase' && f.refId) {
+      const pur = await getOne('purchases', f.refId);
+      if (pur) {
+        const qty = toNumber(pur.quantity);
+        const total = round2(Math.abs(amount));
+        pur.account = account;
+        pur.date = date;
+        pur.totalCost = total;
+        pur.unitCost = qty > 0 ? round2(total / qty) : 0;
+        await put('purchases', pur);
+        const product = await getProduct(pur.productId);
+        if (product) {
+          const all = await getAll('purchases');
+          const mine = all.filter(function (p) { return p.productId === pur.productId; });
+          const latest = mine.length ? mine.reduce(function (a, b) { return (b.createdAt || 0) > (a.createdAt || 0) ? b : a; }) : null;
+          if (latest && latest.id === pur.id) {
+            product.costPrice = pur.unitCost;
+            product.updatedAt = Date.now();
+            await put('products', product);
+          }
+        }
+      }
+      f.account = account;
+      f.amount = round2(-Math.abs(amount));
+      f.date = date;
+      f.note = note;
+      await put('funds', f);
+      return f;
+    }
+
+    // 收款收入：同步营业额里对应账户的金额；账户/日期固定（按日、按账户记）
+    if (f.category === 'settlement') {
+      const abs = round2(Math.abs(amount));
+      const st = await getSettlement(f.date);
+      if (st) {
+        if (f.account === 'wechat') st.wechat = abs;
+        else if (f.account === 'alipay') st.alipay = abs;
+        else if (f.account === 'cash') st.cashBack = round2(toNumber(st.cashOut) + abs);
+        st.updatedAt = Date.now();
+        await put('settlements', st);
+      }
+      f.amount = abs;
+      f.note = note;
+      await put('funds', f);
+      return f;
+    }
+
+    // 现金转出：两条流水（现金减少 / 目标账户增加）金额一起改、日期一起改，保持一对
+    if (f.category === 'transfer' && f.refId) {
+      const abs = round2(Math.abs(amount));
+      const funds = await getAll('funds');
+      for (const g of funds) {
+        if (g.category === 'transfer' && g.refId === f.refId) {
+          const isOut = toNumber(g.amount) < 0;
+          g.amount = isOut ? round2(-abs) : abs;
+          g.date = date;
+          await put('funds', g);
+        }
+      }
+      f.note = note;
+      await put('funds', f);
+      return f;
+    }
+
+    // 手动记账等：直接改
+    f.account = account;
+    f.amount = amount;
+    f.date = date;
+    f.note = note;
+    await put('funds', f);
+    return f;
   }
 
   // ---------- 库存预警 / 预测 ----------
@@ -766,7 +944,11 @@
     listAdjustments: listAdjustments,
     listFunds: listFunds,
     addFund: addFund,
+    transferCashOut: transferCashOut,
     deleteFund: deleteFund,
+    updateFund: updateFund,
+    updateFundFull: updateFundFull,
+    updatePurchaseAmount: updatePurchaseAmount,
     computePredictions: computePredictions,
     exportBackup: exportBackup,
     importBackup: importBackup,

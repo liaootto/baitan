@@ -6,7 +6,7 @@
 
   // ---------- 全局状态 ----------
   // 版本号（和 sw.js 的 CACHE_VERSION 保持一致，改代码时两边一起加 1）
-  const APP_VERSION = 'v22';
+  const APP_VERSION = 'v27';
   let currentTab = 'home';
   let unlocked = false;
   let productSearch = '';
@@ -15,6 +15,7 @@
   let statsDays = [];
   let reconcileDate = '';
   let costRowModes = {}; // 商品id -> 'weight' | 'piece'（核算成本栏记住按克还是按件）
+  let costEditingId = null; // 正在编辑的成本行（商品 id）；null 表示全部只读锁定
   let purchaseEditingId = null; // 商品页内联进货中：当前编辑的商品 id
 
   const UNITS = ['个', '件', '份', '串', '盒', '包', '袋', '瓶', '罐', '杯', '斤', '两', '克', '公斤', '毫升', '升', '箱', '捆', '把', '条', '只', '块', '根', '张', '双', '对', '套', '组', '米'];
@@ -258,7 +259,7 @@
     if (r.createdAt) sub += ' · ' + fmtDateTime(r.createdAt);
     if (r.note) sub += ' · ' + esc(r.note);
     return '<div class="list-item record-row">' +
-      '<div class="main">' +
+      '<div class="main" data-rec-type="' + r.type + '" data-rec-id="' + r.id + '" title="点此查看明细">' +
       '<div class="title">' + esc(r.productName) + ' ×' + qtyLabel + '</div>' +
       '<div class="sub">' + sub + '</div>' +
       '</div>' +
@@ -296,6 +297,97 @@
     });
   }
 
+  // 点流水行查看明细：列出进货价、规格等，方便核对
+  function bindRecordDetail(container) {
+    container.querySelectorAll('[data-rec-type]').forEach(function (el) {
+      el.onclick = function () { openRecordDetail(el.dataset.recType, el.dataset.recId); };
+    });
+  }
+
+  function firstDefined() {
+    for (let i = 0; i < arguments.length; i++) {
+      const v = arguments[i];
+      if (v !== undefined && v !== null && v !== '') return v;
+    }
+    return undefined;
+  }
+
+  function recordDetailHtml(r, product) {
+    const type = r.type;
+    const unit = firstDefined(r.unit, product && product.unit, '件');
+    const spec = DB.toNumber(firstDefined(r.spec, product && product.spec));
+    const specUnit = firstDefined(r.specUnit, product && product.specUnit, '克');
+
+    const isMaterial = (r.productType === 'material') || (product && product.type === 'material');
+    let title = '卖出明细';
+    let emoji = '💰';
+    if (type === 'purchase') { title = '进货明细'; emoji = '🛒'; }
+    else if (type === 'consume') { title = '消耗明细'; emoji = '🧮'; }
+    const typeBadge = isMaterial ? '<span class="badge soon">原材料</span>' : '<span class="badge ok">成品</span>';
+
+    const rows = [];
+    rows.push(['商品', esc(r.productName)]);
+    rows.push(['类型', typeBadge]);
+    if (type === 'purchase') {
+      rows.push(['进货数量', fmtNum(r.quantity) + ' ' + esc(unit)]);
+      rows.push(['进货价', '¥' + fmtMoney(r.unitCost) + ' / ' + esc(unit)]);
+      rows.push(['总金额', '¥' + fmtMoney(r.totalCost)]);
+      rows.push(['使用账户', accountLabel(r.account)]);
+      if (spec > 0) rows.push(['规格', fmtNum(spec) + esc(specUnit) + ' / ' + esc(unit)]);
+    } else if (type === 'consume') {
+      if (r.weightQty != null && DB.toNumber(r.weightQty) > 0) rows.push(['用量', fmtNum(r.weightQty) + esc(r.specUnit || '克')]);
+      else rows.push(['用量', fmtNum(r.quantity) + ' 件']);
+      rows.push(['进价', '¥' + fmtMoney(r.unitCost) + ' / 件']);
+      if (spec > 0) rows.push(['规格', fmtNum(spec) + esc(specUnit) + ' / 件']);
+      rows.push(['成本', '¥' + fmtMoney(r.cost)]);
+    } else { // sale
+      rows.push(['卖出数量', fmtNum(r.quantity) + ' ' + esc(unit)]);
+      rows.push(['售价', '¥' + fmtMoney(r.unitPrice) + ' / ' + esc(unit)]);
+      rows.push(['进价', '¥' + fmtMoney(r.unitCost) + ' / ' + esc(unit)]);
+      rows.push(['总金额', '¥' + fmtMoney(r.totalAmount)]);
+    }
+    rows.push(['日期', esc(r.date)]);
+    if (r.createdAt) rows.push(['时间', fmtDateTime(r.createdAt)]);
+    if (r.note) rows.push(['备注', esc(r.note)]);
+
+    return '<button class="modal-close" data-close>×</button>' +
+      '<h3>' + emoji + ' ' + title + '</h3>' +
+      '<div class="record-detail">' + rows.map(detailItem).join('') + '</div>' +
+      '<button class="btn btn-ghost btn-block" data-close style="margin-top:14px">关闭</button>';
+  }
+
+  // 明细里的一行：标签在上、数值在下（竖排，手机上好读）。kv = [标签, 数值, 可选颜色类]
+  function detailItem(kv) {
+    const cls = kv[2] ? ' ' + kv[2] : '';
+    return '<div class="record-detail-item"><div class="record-detail-k">' + kv[0] + '</div>' +
+      '<div class="record-detail-v' + cls + '">' + kv[1] + '</div></div>';
+  }
+
+  // ---------- 资金流水明细 ----------
+  function fundCategoryLabel(f) {
+    if (f.category === 'purchase') return '进货支出';
+    if (f.category === 'settlement') return '收款收入';
+    if (f.category === 'transfer') return '现金转出';
+    return '手动记账';
+  }
+
+  function bindFundDetail(container) {
+    container.querySelectorAll('[data-fund-id]').forEach(function (el) {
+      el.onclick = function () { openFundEdit(el.dataset.fundId); };
+    });
+  }
+
+  async function openRecordDetail(type, id) {
+    let r = null;
+    if (type === 'sale') { const all = await DB.listSales(); r = all.find(function (x) { return x.id === id; }); }
+    else if (type === 'purchase') { const all = await DB.listPurchases(); r = all.find(function (x) { return x.id === id; }); }
+    else { const all = await DB.listConsumptions(); r = all.find(function (x) { return x.id === id; }); }
+    if (!r) return;
+    let product = null;
+    try { product = await DB.getProduct(r.productId); } catch (err) {}
+    openModal(recordDetailHtml(r, product));
+  }
+
   async function openAllRecords() {
     openModal(
       '<button class="modal-close" data-close>×</button>' +
@@ -312,21 +404,33 @@
     const recs = await getAllRecords();
     listEl.innerHTML = recs.length ? recs.map(recordRow).join('') : '<div class="empty"><p>还没有流水</p></div>';
     bindDeleteRecord(listEl, true);
+    bindRecordDetail(listEl);
   }
 
   async function renderHome() {
     const el = document.getElementById('view-home');
     const date = reconcileDate || DB.todayStr();
-    const [settlement, consumptions, adjustments, products] = await Promise.all([
+    const [settlement, consumptions, adjustments, products, purchases] = await Promise.all([
       DB.getSettlement(date),
       DB.listConsumptions(),
       DB.listAdjustments(),
       DB.listProducts(),
+      DB.listPurchases(),
     ]);
     const dayCons = consumptions.filter(function (c) { return c.date === date; });
-    const usageByProduct = {};
+    const usageByProduct = {}; // 未指定批次的今日用量（成品 / 无进货记录的原材料）
+    const usageByBatch = {};   // 批次(purchaseId) -> 今日用量（件）
     dayCons.forEach(function (c) {
-      usageByProduct[c.productId] = DB.toNumber(usageByProduct[c.productId]) + DB.toNumber(c.quantity);
+      if (c.costPurchaseId) usageByBatch[c.costPurchaseId] = DB.toNumber(usageByBatch[c.costPurchaseId]) + DB.toNumber(c.quantity);
+      else usageByProduct[c.productId] = DB.toNumber(usageByProduct[c.productId]) + DB.toNumber(c.quantity);
+    });
+    const consumedByBatch = {}; // 批次(purchaseId) -> 该批累计消耗（含今天）
+    consumptions.forEach(function (c) {
+      if (c.costPurchaseId) consumedByBatch[c.costPurchaseId] = DB.toNumber(consumedByBatch[c.costPurchaseId]) + DB.toNumber(c.quantity);
+    });
+    const purchasesByProduct = {};
+    purchases.forEach(function (p) {
+      (purchasesByProduct[p.productId] = purchasesByProduct[p.productId] || []).push(p);
     });
     const dayAdj = adjustments.filter(function (a) { return a.date === date; });
     const hasMaterials = products.some(function (p) { return p.type === 'material'; });
@@ -366,11 +470,16 @@
       '<div class="card-title">成本（今天用掉 / 卖掉的量）</div>' +
       '<div class="list" id="cost-fill-list">' +
       (products.length
-        ? products.map(function (p) { return costFillRow(p, usageByProduct[p.id]); }).join('')
+        ? products.map(function (p) {
+            const batches = (purchasesByProduct[p.id] || []).sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
+            if (p.type === 'material' && batches.length) {
+              return costBatchGroupHtml(p, batches, usageByBatch, consumedByBatch);
+            }
+            return costFillRow(p, usageByProduct[p.id]);
+          }).join('')
         : '<div class="empty"><p>还没有商品，先到「商品」添加</p></div>') +
       '</div>' +
-      '<button class="btn btn-primary btn-block" id="rec-save-cost" style="margin-top:10px">保存成本</button>' +
-      '<div class="hint" style="margin-top:6px">填好数量点「保存」就固定住；之后要改直接点 − / ＋ 微调（会自动保存）。不填或填 0 表示今天没用。</div>' +
+      '<div class="hint" style="margin-top:8px">每行点「改」改今天的用量：框里可填总数，也可填「+5 / −3」在已记用量上加 5、减 3（改前用量会一直显示在上面，不会忘）；改完点「保存」。原材料如果分几批进货，会按每批的进价分开记用量。</div>' +
       (dayAdj.length
         ? '<div style="margin-top:8px"><div class="hint">盘点校正：</div>' + dayAdj.map(function (a) {
             const d = DB.toNumber(a.delta);
@@ -424,8 +533,9 @@
     };
 
     async function saveCostRow(row) {
-      const val = DB.toNumber(row.querySelector('.cost-qty').value);
-      await DB.setDailyConsumption({ productId: row.dataset.id, quantity: val, mode: row.dataset.mode, date: date });
+      const input = row.querySelector('.cost-qty');
+      const val = parseCostQty(input.value, row);
+      await DB.setDailyConsumption({ productId: row.dataset.productId, quantity: val, mode: row.dataset.mode, date: date, purchaseId: row.dataset.purchase || undefined });
     }
     async function rerenderKeepScroll() {
       const y = window.scrollY;
@@ -433,24 +543,24 @@
       window.scrollTo(0, y);
     }
 
-    el.querySelector('#rec-save-cost').onclick = async function () {
-      const rows = el.querySelectorAll('#cost-fill-list .cost-row');
-      let errMsg = '';
-      for (let i = 0; i < rows.length; i++) {
-        try { await saveCostRow(rows[i]); } catch (err) { if (!errMsg) errMsg = err.message; }
-      }
-      if (errMsg) toast(errMsg);
-      else toast('已保存成本');
-      await rerenderKeepScroll();
-    };
+    // 点「改」进入该行的编辑态（同一时刻只有一行可编辑，其余保持锁定只读）
+    el.querySelectorAll('#cost-fill-list .cost-edit').forEach(function (b) {
+      b.onclick = function () {
+        costEditingId = b.dataset.editId;
+        rerenderKeepScroll();
+      };
+    });
 
+    // 编辑态：− / ＋ 步进（相对当前值，自动保存）
     el.querySelectorAll('#cost-fill-list .cost-row .cost-step').forEach(function (b) {
       b.onclick = async function () {
         const row = b.closest('.cost-row');
         const input = row.querySelector('.cost-qty');
         const step = parseInt(b.dataset.step, 10);
-        const next = Math.max(0, DB.round2(DB.toNumber(input.value) + step));
-        input.value = (next === 0 ? '' : String(next));
+        const cur = parseCostQty(input.value, row); // 支持框里是「+5 / -3」，留空=当前值
+        const next = Math.max(0, DB.round3(cur + step));
+        input.value = String(next);
+        refreshCostRowView(row);
         try {
           await saveCostRow(row);
         } catch (err) { toast(err.message || '操作失败'); }
@@ -458,16 +568,31 @@
       };
     });
 
+    // 编辑态：切换按克/按件
     el.querySelectorAll('#cost-fill-list .cost-row .mini-seg button').forEach(function (b) {
       b.onclick = function () {
         const row = b.closest('.cost-row');
-        costRowModes[row.dataset.id] = b.dataset.u;
+        costRowModes[row.dataset.productId] = b.dataset.u;
         rerenderKeepScroll();
       };
     });
 
+    // 编辑态：实时刷新金额/剩余
     el.querySelectorAll('#cost-fill-list .cost-row .cost-qty').forEach(function (input) {
       input.addEventListener('input', function () { refreshCostRowView(input.closest('.cost-row')); });
+    });
+
+    // 编辑态：取消 / 保存
+    el.querySelectorAll('#cost-fill-list .cost-row .cost-cancel').forEach(function (b) {
+      b.onclick = function () { costEditingId = null; rerenderKeepScroll(); };
+    });
+    el.querySelectorAll('#cost-fill-list .cost-row .cost-save').forEach(function (b) {
+      b.onclick = async function () {
+        const row = b.closest('.cost-row');
+        try { await saveCostRow(row); } catch (err) { toast(err.message || '操作失败'); return; }
+        costEditingId = null;
+        await rerenderKeepScroll();
+      };
     });
 
     el.querySelector('#rec-adjust').onclick = function () {
@@ -485,7 +610,7 @@
     const stock = DB.toNumber(row.dataset.stock);
     const savedUsed = DB.toNumber(row.dataset.used);
     const mode = row.dataset.mode;
-    const raw = DB.toNumber(row.querySelector('.cost-qty').value);
+    const raw = parseCostQty(row.querySelector('.cost-qty').value, row);
     let pieces = (mode === 'weight' && spec > 0) ? raw / spec : raw;
     pieces = DB.round3(pieces);
     const amount = DB.round2(pieces * cost);
@@ -552,6 +677,7 @@
       '<div class="field" style="margin-bottom:0"><label>使用账户</label><select data-paccount>' + accountOpts + '</select></div>' +
       '<div class="field" style="margin-bottom:0"><label>总金额（元）</label><input type="number" inputmode="decimal" step="0.01" min="0" data-ptotal value="' + (unitCost || '') + '"></div>' +
       '</div>' +
+      '<div class="field" style="margin-top:10px;margin-bottom:0"><label>日期</label><input type="date" data-pdate value="' + DB.todayStr() + '"><div class="hint">前几天忘记了，选那天补上</div></div>' +
       '<div class="field-row" style="margin-top:12px">' +
       '<button class="btn btn-primary btn-block" data-pok>进货</button>' +
       '<button class="btn btn-ghost btn-block" data-pcancel>取消</button>' +
@@ -643,7 +769,7 @@
       total.addEventListener('input', function () { total.dataset.edited = '1'; });
       editor.querySelector('[data-pok]').onclick = async function () {
         try {
-          await DB.addPurchase({ productId: pid, quantity: qty.value, totalCost: total.value, account: editor.querySelector('[data-paccount]').value, date: DB.todayStr(), note: '' });
+          await DB.addPurchase({ productId: pid, quantity: qty.value, totalCost: total.value, account: editor.querySelector('[data-paccount]').value, date: editor.querySelector('[data-pdate]').value, note: '' });
           purchaseEditingId = null;
           toast('已进货');
           renderProducts(); renderHome(); renderStats();
@@ -661,6 +787,7 @@
         r.onclick = function () { openProductFormById(r.dataset.alertProduct); };
       });
       bindDeleteRecord(el, false);
+      bindRecordDetail(el);
     }
   }
 
@@ -971,6 +1098,27 @@
     };
   }
 
+  // 解析成本栏的用量输入：支持「+5 / -3」表示相对当天已保存用量的增减，也支持直接填总数。
+  // 留空 = 保持当天已保存的用量不变（编辑框默认留空，避免「要先删掉原数字才想起原来是几」）。
+  function parseCostQty(raw, row) {
+    const spec = DB.toNumber(row.dataset.spec);
+    const mode = row.dataset.mode;
+    const savedUsed = DB.toNumber(row.dataset.used); // 当天已保存的用量（件）
+    const s = String(raw == null ? '' : raw).trim();
+    if (s === '') {
+      return (mode === 'weight' && spec > 0) ? DB.round3(savedUsed * spec) : savedUsed;
+    }
+    const dm = s.match(/^([+-])\s*([0-9]+(?:\.[0-9]+)?)$/);
+    if (dm) {
+      const sign = dm[1] === '-' ? -1 : 1;
+      const deltaDisplay = DB.toNumber(dm[2]);          // 增减量（按显示单位）
+      const deltaPieces = (mode === 'weight' && spec > 0) ? deltaDisplay / spec : deltaDisplay;
+      const newPieces = Math.max(0, DB.round3(savedUsed + sign * deltaPieces));
+      return (mode === 'weight' && spec > 0) ? DB.round3(newPieces * spec) : newPieces;
+    }
+    return DB.toNumber(s);
+  }
+
   function costFillRow(p, usagePieces) {
     const isMat = p.type === 'material';
     const spec = DB.toNumber(p.spec);
@@ -980,37 +1128,143 @@
     const displayUnit = hasSpec ? (mode === 'weight' ? specUnit : '件') : (p.unit || '件');
     const remUnit = hasSpec ? '件' : (p.unit || '件');
     const used = DB.toNumber(usagePieces);          // 今天已保存的用量（件）
-    const unitCost = DB.toNumber(p.costPrice);
-    const amount = DB.round2(used * unitCost);       // 这件商品今天的成本金额
     const remaining = DB.toNumber(p.stock);          // 当前库存（已扣掉今天用量）
-    const tag = isMat ? '' : ' <span class="badge ok" style="font-size:11px;padding:1px 6px">成品</span>';
+    const unitCost = DB.toNumber(p.costPrice);       // 无批次：按商品当前进价
+    const amount = DB.round2(used * unitCost);
+    const tag = isMat ? ' <span class="badge soon" style="font-size:11px;padding:1px 6px">原材料</span>' : ' <span class="badge ok" style="font-size:11px;padding:1px 6px">成品</span>';
     const specHint = hasSpec ? ' <span style="font-size:12px;color:var(--ink-3)">' + p.spec + specUnit + '/件</span>' : '';
+    const remText = fmtNum(remaining) + ' ' + remUnit + (hasSpec ? '（' + fmtNum(DB.round3(remaining * spec)) + specUnit + '）' : '');
+    const usedDisplay = (hasSpec && mode === 'weight') ? DB.round3(used * spec) : used;
+    const usedUnit = (hasSpec && mode === 'weight') ? specUnit : remUnit;
+    const isEditing = (costEditingId === p.id);
+
+    if (!isEditing) {
+      const summary = used > 0
+        ? '今日用量 <b>' + fmtNum(usedDisplay) + usedUnit + '</b> · 成本 <b>¥' + fmtMoney(amount) + '</b>'
+        : '今日还没记用量';
+      return '<div class="list-item cost-row" data-id="' + p.id + '" data-product-id="' + p.id + '">' +
+        '<div class="main">' +
+        '<div class="title">' + esc(p.name) + tag + specHint + '</div>' +
+        '<div class="sub">进¥' + fmtMoney(unitCost) + ' · 剩 <span class="stock-num">' + remText + '</span></div>' +
+        '<div class="cost-summary">' + summary + '</div>' +
+        '</div>' +
+        '<button type="button" class="btn btn-secondary cost-edit" data-edit-id="' + p.id + '">改</button>' +
+        '</div>';
+    }
+
+    // 编辑态
     const toggle = hasSpec
       ? '<div class="mini-seg">' +
         '<button type="button" data-u="weight" class="' + (mode === 'weight' ? 'active' : '') + '">' + esc(specUnit) + '</button>' +
         '<button type="button" data-u="piece" class="' + (mode === 'piece' ? 'active' : '') + '">件</button>' +
         '</div>'
       : '';
-    let remText = fmtNum(remaining) + ' ' + remUnit;
-    if (hasSpec) remText += '（' + fmtNum(DB.round3(remaining * spec)) + specUnit + '）';
-    let displayVal = '';
-    if (used > 0) displayVal = (hasSpec && mode === 'weight') ? DB.round3(used * spec) : used;
-    return '<div class="list-item cost-row" data-id="' + p.id + '" data-mode="' + mode + '"' +
+
+    return '<div class="list-item cost-row editing" data-id="' + p.id + '" data-product-id="' + p.id + '" data-mode="' + mode + '"' +
       ' data-cost="' + unitCost + '" data-spec="' + spec + '" data-specunit="' + esc(specUnit) + '" data-remunit="' + esc(remUnit) + '"' +
       ' data-stock="' + remaining + '" data-used="' + used + '">' +
       '<div class="main">' +
       '<div class="title">' + esc(p.name) + tag + specHint + '</div>' +
-      '<div class="sub">进¥' + fmtMoney(unitCost) + ' · 剩 <span class="stock-num cost-remaining">' + remText + '</span></div>' +
+      '<div class="sub">进<span class="cost-price">¥' + fmtMoney(unitCost) + '</span> · 剩 <span class="stock-num cost-remaining">' + remText + '</span></div>' +
+      '<div class="cost-base-hint">改前今日用量 <b>' + fmtNum(usedDisplay) + usedUnit + '</b></div>' +
       toggle +
       '</div>' +
       '<div class="cost-side">' +
       '<div class="cost-input-wrap">' +
       '<button type="button" class="cost-step" data-step="-1">−</button>' +
-      '<input type="number" inputmode="decimal" step="0.001" min="0" placeholder="0" class="cost-qty" value="' + displayVal + '">' +
+      '<input type="text" inputmode="decimal" placeholder="+5 或填总数" class="cost-qty" value="">' +
       '<button type="button" class="cost-step" data-step="1">＋</button>' +
       '<span class="cost-unit">' + esc(displayUnit) + '</span>' +
       '</div>' +
       '<div class="cost-amt">' + (used > 0 ? '¥' + fmtMoney(amount) : '') + '</div>' +
+      '<div class="cost-row-actions">' +
+      '<button type="button" class="btn btn-ghost cost-cancel">取消</button>' +
+      '<button type="button" class="btn btn-primary cost-save">保存</button>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+  }
+
+  // 原材料分成几批进货时：一个商品一组，每组下一个批次一行，进价固定、各自独立记用量
+  function costBatchGroupHtml(p, batches, usageByBatch, consumedByBatch) {
+    const spec = DB.toNumber(p.spec);
+    const specUnit = p.specUnit || '克';
+    const hasSpec = spec > 0;
+    const specHint = hasSpec ? ' <span style="font-size:12px;color:var(--ink-3)">' + p.spec + specUnit + '/件</span>' : '';
+    let totalCost = 0;
+    batches.forEach(function (b) {
+      totalCost += DB.toNumber(usageByBatch[b.id]) * DB.toNumber(b.unitCost);
+    });
+    totalCost = DB.round2(totalCost);
+    const stockText = fmtNum(p.stock) + (p.unit || '件') + (hasSpec ? '（' + fmtNum(DB.round3(DB.toNumber(p.stock) * spec)) + specUnit + '）' : '');
+    const head = '<div class="cost-group-head">' +
+      '<div class="title">' + esc(p.name) + ' <span class="badge soon" style="font-size:11px;padding:1px 6px">原材料</span>' + specHint + '</div>' +
+      '<div class="sub">总剩 ' + stockText + (totalCost > 0 ? ' · 今日成本 <b>¥' + fmtMoney(totalCost) + '</b>' : '') + '</div>' +
+      '</div>';
+    const rows = batches.map(function (b) {
+      return costBatchRowHtml(p, b, DB.toNumber(usageByBatch[b.id]), DB.toNumber(consumedByBatch[b.id]));
+    }).join('');
+    return head + rows;
+  }
+
+  // 单个批次的一行：进价/日期/进货量固定，今日用量独立编辑
+  function costBatchRowHtml(p, batch, todayUsed, totalConsumed) {
+    const spec = DB.toNumber(p.spec);
+    const specUnit = p.specUnit || '克';
+    const hasSpec = spec > 0;
+    const mode = costRowModes[p.id] || (hasSpec ? 'weight' : 'piece');
+    const displayUnit = hasSpec ? (mode === 'weight' ? specUnit : '件') : (p.unit || '件');
+    const remUnit = hasSpec ? '件' : (p.unit || '件');
+    const unitCost = DB.toNumber(batch.unitCost);
+    const batchRemaining = DB.round3(DB.toNumber(batch.quantity) - totalConsumed); // 该批剩余（已扣掉今天）
+    const amount = DB.round2(todayUsed * unitCost);
+    const usedDisplay = (hasSpec && mode === 'weight') ? DB.round3(todayUsed * spec) : todayUsed;
+    const usedUnit = (hasSpec && mode === 'weight') ? specUnit : remUnit;
+    const remText = fmtNum(batchRemaining) + ' ' + remUnit + (hasSpec ? '（' + fmtNum(DB.round3(batchRemaining * spec)) + specUnit + '）' : '');
+    const isEditing = (costEditingId === batch.id);
+
+    if (!isEditing) {
+      const summary = todayUsed > 0
+        ? '今日用量 <b>' + fmtNum(usedDisplay) + usedUnit + '</b> · 成本 <b>¥' + fmtMoney(amount) + '</b>'
+        : '今日还没记用量';
+      return '<div class="list-item cost-row cost-batch-row" data-id="' + batch.id + '" data-product-id="' + p.id + '">' +
+        '<div class="main">' +
+        '<div class="title">进价 <b>¥' + fmtMoney(unitCost) + '</b> · ' + esc(batch.date) + ' ×' + fmtNum(batch.quantity) + '</div>' +
+        '<div class="sub">该批剩 <span class="stock-num">' + remText + '</span></div>' +
+        '<div class="cost-summary">' + summary + '</div>' +
+        '</div>' +
+        '<button type="button" class="btn btn-secondary cost-edit" data-edit-id="' + batch.id + '">改</button>' +
+        '</div>';
+    }
+
+    const toggle = hasSpec
+      ? '<div class="mini-seg">' +
+        '<button type="button" data-u="weight" class="' + (mode === 'weight' ? 'active' : '') + '">' + esc(specUnit) + '</button>' +
+        '<button type="button" data-u="piece" class="' + (mode === 'piece' ? 'active' : '') + '">件</button>' +
+        '</div>'
+      : '';
+
+    return '<div class="list-item cost-row cost-batch-row editing" data-id="' + batch.id + '" data-product-id="' + p.id + '" data-purchase="' + batch.id + '" data-mode="' + mode + '"' +
+      ' data-cost="' + unitCost + '" data-spec="' + spec + '" data-specunit="' + esc(specUnit) + '" data-remunit="' + esc(remUnit) + '"' +
+      ' data-stock="' + batchRemaining + '" data-used="' + todayUsed + '">' +
+      '<div class="main">' +
+      '<div class="title">进价 <span class="cost-price">¥' + fmtMoney(unitCost) + '</span> · ' + esc(batch.date) + ' ×' + fmtNum(batch.quantity) + '</div>' +
+      '<div class="sub">该批剩 <span class="stock-num cost-remaining">' + remText + '</span></div>' +
+      '<div class="cost-base-hint">改前今日用量 <b>' + fmtNum(usedDisplay) + usedUnit + '</b></div>' +
+      toggle +
+      '</div>' +
+      '<div class="cost-side">' +
+      '<div class="cost-input-wrap">' +
+      '<button type="button" class="cost-step" data-step="-1">−</button>' +
+      '<input type="text" inputmode="decimal" placeholder="+5 或填总数" class="cost-qty" value="">' +
+      '<button type="button" class="cost-step" data-step="1">＋</button>' +
+      '<span class="cost-unit">' + esc(displayUnit) + '</span>' +
+      '</div>' +
+      '<div class="cost-amt">' + (todayUsed > 0 ? '¥' + fmtMoney(amount) : '') + '</div>' +
+      '<div class="cost-row-actions">' +
+      '<button type="button" class="btn btn-ghost cost-cancel">取消</button>' +
+      '<button type="button" class="btn btn-primary cost-save">保存</button>' +
+      '</div>' +
       '</div>' +
       '</div>';
   }
@@ -1089,31 +1343,150 @@
     const pos = DB.toNumber(f.amount) >= 0;
     const cls = pos ? 'minus' : 'plus';
     const sign = pos ? '+' : '-';
-    const cat = f.category === 'purchase' ? '进货支出' : (f.category === 'settlement' ? '收款收入' : '手动记账');
+    const cat = f.category === 'purchase' ? '进货支出' : (f.category === 'settlement' ? '收款收入' : (f.category === 'transfer' ? '现金转出' : '手动记账'));
     return '<div class="list-item record-row">' +
-      '<div class="main">' +
+      '<div class="main" data-fund-id="' + f.id + '" title="点此查看明细">' +
       '<div class="title">' + accountLabel(f.account) + ' · ' + esc(f.note || cat) + '</div>' +
       '<div class="sub">' + cat + ' · ' + esc(f.date) + ' · ' + fmtDateTime(f.createdAt) + '</div>' +
       '</div>' +
       '<div class="amount ' + cls + '">' + sign + '¥' + fmtMoney(Math.abs(DB.toNumber(f.amount))) + '</div>' +
-      '<button class="btn btn-danger" data-del-fund="' + f.id + '" data-cat="' + (f.category || '') + '" style="padding:6px 11px;font-size:13px">删</button>' +
+      '<button class="btn btn-secondary" data-edit-fund="' + f.id + '" data-cat="' + (f.category || '') + '" style="padding:6px 11px;font-size:13px">改</button>' +
       '</div>';
   }
 
-  function bindDeleteFund(container) {
-    container.querySelectorAll('[data-del-fund]').forEach(function (b) {
+  function bindEditFund(container) {
+    container.querySelectorAll('[data-edit-fund]').forEach(function (b) {
+      b.onclick = function () { openFundEdit(b.dataset.editFund); };
+    });
+  }
+
+  // 点资金流水那一行（或「改」按钮）进入修改：所有类型都能改金额等关键数据、都能删除，改后时间不变。
+  async function openFundEdit(id) {
+    const funds = await DB.listFunds();
+    const f = funds.find(function (x) { return x.id === id; });
+    if (!f) return;
+
+    const cat = f.category || 'adjust';
+    const isAdjust = cat === 'adjust';
+    const isPurchase = cat === 'purchase';
+    const isSettlement = cat === 'settlement';
+    const isTransfer = cat === 'transfer';
+    const pos = DB.toNumber(f.amount) >= 0;
+    const abs = Math.abs(DB.toNumber(f.amount));
+
+    let title = '修改记账';
+    if (isPurchase) title = '修改进货支出';
+    else if (isSettlement) title = '修改收款收入';
+    else if (isTransfer) title = '修改现金转出';
+
+    // 账户：手动记账 / 进货可改；收款、转账的账户由来源固定，只读
+    const acctField = (isSettlement || isTransfer)
+      ? '<div class="field"><label>账户</label><input disabled value="' + accountLabel(f.account) + '"></div>'
+      : '<div class="field"><label>账户</label>' +
+        '<div class="segmented" id="fund-edit-acct" style="margin:0">' +
+        '<button type="button" data-a="cash" class="' + (f.account === 'cash' ? 'active' : '') + '">现金</button>' +
+        '<button type="button" data-a="wechat" class="' + (f.account === 'wechat' ? 'active' : '') + '">微信</button>' +
+        '<button type="button" data-a="alipay" class="' + (f.account === 'alipay' ? 'active' : '') + '">支付宝</button>' +
+        '</div></div>';
+
+    // 类型：手动记账可切换收入 / 支出，其余固定
+    const typeField = isAdjust
+      ? '<div class="field"><label>类型</label>' +
+        '<div class="segmented" id="fund-edit-type" style="margin:0">' +
+        '<button type="button" data-t="in" class="' + (pos ? 'active' : '') + '">收入</button>' +
+        '<button type="button" data-t="out" class="' + (!pos ? 'active' : '') + '">支出</button>' +
+        '</div></div>'
+      : '<div class="field"><label>类型</label><input disabled value="' + fundCategoryLabel(f) + '"></div>';
+
+    // 收款按日记录，日期固定；其余可改日期
+    const dateField = isSettlement
+      ? '<div class="field"><label>日期</label><input disabled value="' + esc(f.date) + '"></div>' +
+        '<div class="hint">收款按日记录，改日期请到「首页 → 营业额」操作。</div>'
+      : '<div class="field"><label>日期</label><input name="date" type="date" value="' + esc(f.date) + '"></div>';
+
+    // 进货支出额外显示商品信息（数量不改）
+    let goodsField = '';
+    if (isPurchase && f.refId) {
+      const purchases = await DB.listPurchases();
+      const purchase = purchases.find(function (p) { return p.id === f.refId; });
+      if (purchase) {
+        goodsField = '<div class="field"><label>商品（数量不改）</label><input disabled value="' + esc(purchase.productName) + ' ×' + fmtNum(purchase.quantity) + esc(purchase.unit || '件') + '"></div>';
+      }
+    }
+
+    openModal(
+      '<button class="modal-close" data-close>×</button>' +
+      '<h3>' + title + '</h3>' +
+      '<form id="fund-edit-form">' +
+      acctField + typeField +
+      '<div class="field"><label>金额（元）*</label><input name="amount" type="number" inputmode="decimal" step="0.01" min="0" required value="' + abs + '"></div>' +
+      goodsField + dateField +
+      '<div class="field"><label>备注</label><input name="note" value="' + esc(f.note) + '" placeholder="选填"></div>' +
+      '<div class="hint" style="margin-bottom:12px">保存后记录时间不变（仍是 ' + fmtDateTime(f.createdAt) + '）</div>' +
+      '<button class="btn btn-primary btn-block btn-lg" type="submit">保存修改</button>' +
+      '</form>' +
+      '<button class="btn btn-danger btn-block" id="fund-delete-btn" style="margin-top:12px">删除这条记录</button>'
+    );
+
+    let acct = f.account;
+    let dir = pos ? 'in' : 'out';
+    const acctSeg = document.getElementById('fund-edit-acct');
+    if (acctSeg) acctSeg.querySelectorAll('button').forEach(function (b) {
       b.onclick = function () {
-        const cat = b.dataset.cat;
-        let msg = '删除这条资金记录？';
-        if (cat === 'purchase') msg = '这会撤销整条进货：库存会加回、钱包扣款也撤销。确定吗？';
-        else if (cat === 'settlement') msg = '删除这条收款？首页对应的营业额那一项也会一起清掉。确定吗？';
-        showConfirm(msg, async function () {
-          await DB.deleteFund(b.dataset.delFund);
-          toast('已删除');
-          renderWallet(); renderHome(); renderProducts(); renderStats();
-        });
+        acct = b.dataset.a;
+        acctSeg.querySelectorAll('button').forEach(function (x) { x.classList.toggle('active', x === b); });
       };
     });
+    const typeSeg = document.getElementById('fund-edit-type');
+    if (typeSeg) typeSeg.querySelectorAll('button').forEach(function (b) {
+      b.onclick = function () {
+        dir = b.dataset.t;
+        typeSeg.querySelectorAll('button').forEach(function (x) { x.classList.toggle('active', x === b); });
+      };
+    });
+
+    document.getElementById('fund-edit-form').onsubmit = async function (e) {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const amt = DB.toNumber(fd.get('amount'));
+      if (!(amt > 0)) { toast('请填写大于 0 的金额'); return; }
+      let amount;
+      if (isAdjust) amount = dir === 'out' ? -amt : amt;
+      else if (isPurchase) amount = -amt;
+      else amount = amt; // 收款 / 转账用绝对值
+      let note = fd.get('note');
+      if (!note) {
+        if (isPurchase) note = '进货支出';
+        else if (isSettlement) note = accountLabel(f.account) + '收款';
+        else if (isTransfer) note = '现金转出';
+        else note = dir === 'out' ? '支出' : '收入';
+      }
+      try {
+        await DB.updateFundFull(f.id, {
+          account: (isSettlement || isTransfer) ? undefined : acct,
+          amount: amount,
+          date: isSettlement ? undefined : (fd.get('date') || f.date),
+          note: note,
+        });
+      } catch (err) { toast(err.message || '操作失败'); return; }
+      closeModal();
+      toast('已修改（时间不变）');
+      renderWallet(); renderHome(); renderProducts(); renderStats();
+    };
+
+    document.getElementById('fund-delete-btn').onclick = function () {
+      let msg = '删除这条资金记录？';
+      if (isPurchase) msg = '这会撤销整条进货：库存会加回、钱包扣款也撤销。确定吗？';
+      else if (isSettlement) msg = '删除这条收款？首页对应的营业额那一项也会一起清掉。确定吗？';
+      else if (isTransfer) msg = '删除这条转账？「现金减少」和「转入目标账户」两条会一起撤销。确定吗？';
+      else msg = '删除这条记账记录？';
+      showConfirm(msg, async function () {
+        await DB.deleteFund(f.id);
+        closeModal();
+        toast('已删除');
+        renderWallet(); renderHome(); renderProducts(); renderStats();
+      });
+    };
   }
 
   async function renderWallet() {
@@ -1137,6 +1510,7 @@
       '</div>' +
       '<div class="hint" style="margin-top:6px">余额 = 收款收入 − 进货支出 + 手动记的账。每天的带出现金 / 带回现金会算进「现金」账户。</div>' +
       '<button class="btn btn-primary btn-block" id="fund-add" style="margin-top:10px">＋ 记一笔</button>' +
+      '<button class="btn btn-ghost btn-block" id="fund-transfer" style="margin-top:8px">💸 现金转出（转到微信 / 支付宝）</button>' +
       '</div>' +
       '<div class="section-head" style="margin-top:4px"><span class="t">资金流水</span></div>' +
       (funds.length
@@ -1144,7 +1518,9 @@
         : '<div class="card"><div class="empty"><p>还没有资金记录</p></div></div>');
 
     el.querySelector('#fund-add').onclick = function () { openFundForm(); };
-    bindDeleteFund(el);
+    el.querySelector('#fund-transfer').onclick = function () { openTransferForm(); };
+    bindEditFund(el);
+    bindFundDetail(el);
   }
 
   function openFundForm() {
@@ -1199,6 +1575,44 @@
       closeModal();
       toast('已记录');
       renderWallet();
+    };
+  }
+
+  // 现金转出：把现金转到微信/支付宝（现金减少、目标账户增加）
+  function openTransferForm() {
+    openModal(
+      '<button class="modal-close" data-close>×</button>' +
+      '<h3>现金转出</h3>' +
+      '<p class="hint" style="margin:0 0 10px">把现金转到微信或支付宝：现金减少、目标账户增加，三账户总额不变。</p>' +
+      '<form id="transfer-form">' +
+      '<div class="field"><label>转到哪里</label>' +
+      '<div class="segmented" id="transfer-to-seg" style="margin:0">' +
+      '<button type="button" data-t="wechat" class="active">微信</button>' +
+      '<button type="button" data-t="alipay">支付宝</button>' +
+      '</div></div>' +
+      '<div class="field"><label>金额（元）*</label><input name="amount" type="number" inputmode="decimal" step="0.01" min="0" required placeholder="0"></div>' +
+      '<div class="field"><label>备注</label><input name="note" placeholder="选填，如：当天现金存微信"></div>' +
+      '<button class="btn btn-primary btn-block btn-lg" type="submit">确认转出</button>' +
+      '</form>'
+    );
+
+    let to = 'wechat';
+    document.querySelectorAll('#transfer-to-seg button').forEach(function (b) {
+      b.onclick = function () {
+        to = b.dataset.t;
+        document.querySelectorAll('#transfer-to-seg button').forEach(function (x) { x.classList.toggle('active', x === b); });
+      };
+    });
+
+    document.getElementById('transfer-form').onsubmit = async function (e) {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        await DB.transferCashOut({ to: to, amount: fd.get('amount'), note: fd.get('note'), date: DB.todayStr() });
+      } catch (err) { toast(err.message || '操作失败'); return; }
+      closeModal();
+      toast('已转出');
+      renderWallet(); renderHome(); renderStats();
     };
   }
 
@@ -1475,7 +1889,10 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = '摆摊账本备份-' + DB.todayStr() + '.json';
+    const now = new Date();
+    const p2 = function (n) { return String(n).padStart(2, '0'); };
+    const ts = now.getFullYear() + '-' + p2(now.getMonth() + 1) + '-' + p2(now.getDate()) + '-' + p2(now.getHours()) + '-' + p2(now.getMinutes());
+    a.download = '摆摊账本备份-' + ts + '.json';
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1581,10 +1998,10 @@
       '<button class="modal-close" data-close>×</button>' +
       '<h3>使用说明</h3>' +
       '<div style="font-size:14px;color:var(--ink-2);line-height:1.9">' +
-      '<p style="margin:0 0 8px"><strong>1. 每日利润核算（重要）</strong><br>就在「首页」直接填：先填带出现金（出门带的钱）、微信收款、支付宝收款、带回现金（收摊剩的钱）（现金收入 = 带回 − 带出）。带出现金可以点旁边的「单独保存」先单独记。再到「成本」一栏在每个商品后面的框里填今天用掉/卖掉的数量，点「保存成本」，系统自动算营业额、成本、利润。</p>' +
+      '<p style="margin:0 0 8px"><strong>1. 每日利润核算（重要）</strong><br>就在「首页」直接填：先填带出现金（出门带的钱）、微信收款、支付宝收款、带回现金（收摊剩的钱）（现金收入 = 带回 − 带出）。带出现金可以点旁边的「单独保存」先单独记。再到「成本」一栏，每个商品后面点「改」填今天用掉/卖掉的数量，改完点「保存」，系统自动算营业额、成本、利润。成本栏默认只读锁定，改哪个点哪个的「改」（同一时刻只开一行，不误触）；框里可填总数，也可填「+5」「−3」表示加 5、减 3（改前的用量会一直显示在上方，不会忘）。进价变了，点编辑里的进价下拉选另一批进货。</p>' +
       '<p style="margin:0 0 8px"><strong>2. 商品 / 进货 / 成本</strong><br>到「商品」添加商品：成品填进价+售价，原材料填进价、可选填「规格」（每件克重）。「库存预警线」可以按件、也可以按重量（克/斤等）设。点商品行的「进」直接在那行改数量进货（选「使用账户」现金/微信/支付宝，会自动从对应账户扣钱），不用弹窗；「卖」「用」也能直接记。成本栏会列出所有商品，填用量即按进价算成本、显示金额和剩余库存，并自动扣库存。「商品」页下方有库存预警和最近流水。</p>' +
       '<p style="margin:0 0 8px"><strong>3. 钱包 / 资金记录</strong><br>「钱包」页把现金、微信、支付宝三个账户分开记余额：收款收入进对应账户、进货从所选账户扣钱，还能「记一笔」手动记（比如初始现金）。每笔资金流水都记了操作时间（精确到秒）。</p>' +
-      '<p style="margin:0 0 8px"><strong>4. 利润 / 统计</strong><br>利润 = 营业额 − 成本。营业额 = 微信 + 支付宝 + 现金，首页填完实时显示。记错了到「商品」页下方的「最近流水」点「删」（或「查看全部」）撤销，进货/卖货/消耗的库存会自动改回去。「统计」里看每天的营业额、成本、利润趋势，以及「卖得最好的商品」。</p>' +
+      '<p style="margin:0 0 8px"><strong>4. 利润 / 统计</strong><br>利润 = 营业额 − 成本。营业额 = 微信 + 支付宝 + 现金，首页填完实时显示。记错了到「商品」页下方的「最近流水」点「删」（或「查看全部」）撤销，进货/卖货/消耗的库存会自动改回去；点任意一行流水还能看明细（进货价、规格、时间等），方便核对。「统计」里看每天的营业额、成本、利润趋势，以及「卖得最好的商品」。</p>' +
       '<p style="margin:0 0 8px"><strong>5. 两台手机同步</strong><br>手机A「设置 → 导出备份」得到一个文件 → 用微信发给手机B。手机B在微信里点开文件 → 右上角「…」→「保存到手机」→ 存到「下载 / Download」文件夹，再回本 app「设置 → 导入备份」选它。</p>' +
       '<p style="margin:0 0 8px"><strong>5.1 小米等手机「导入」点不动怎么办</strong><br>桌面图标那个窗口限制多，选文件用不了。用手机自带浏览器打开 liaootto.github.io/baitan 再导入即可——数据是和图标共用的，导完回去看都一样。实在不行再用「粘贴备份内容（备用）」：把备份文字的「显示备份文字」复制过来粘贴。</p>' +
       '<p style="margin:0 0 8px"><strong>6. 备份</strong><br>数据只存在本机，建议定期导出备份存到微信收藏或云盘，防止换手机或误删。</p>' +

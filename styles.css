@@ -486,3 +486,66 @@ main { flex: 1; padding: 14px 14px 20px; }
 .table-mini td:first-child, .table-mini th:first-child { text-align: left; }
 
 .link-btn { background: none; border: none; color: var(--brand); font-size: 13px; font-weight: 600; font-family: inherit; }
+
+/* ---------- 成本核算行（锁定摘要 + 逐行编辑） ---------- */
+.cost-summary { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
+.cost-summary b { color: var(--brand-dark); }
+.cost-edit { flex-shrink: 0; padding: 8px 14px; font-size: 14px; }
+
+.cost-row.editing { flex-direction: column; align-items: stretch; }
+.cost-row.editing .cost-side { align-items: flex-start; width: 100%; margin-top: 10px; gap: 8px; }
+.cost-row.editing .cost-amt { align-self: flex-end; font-size: 14px; }
+
+.cost-base-hint { font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+.cost-base-hint b { color: var(--brand-dark); }
+
+.cost-batch-wrap { margin-top: 8px; }
+.cost-batch {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--surface);
+  color: var(--ink);
+  -webkit-appearance: none;
+  appearance: none;
+}
+.cost-batch:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(234,88,12,.14); }
+
+.cost-row-actions { display: flex; gap: 8px; width: 100%; }
+.cost-row-actions .btn { flex: 1; padding: 10px; font-size: 15px; }
+
+/* 原材料分批次：一个商品一组，组头 + 每批一行 */
+.cost-group-head {
+  padding: 11px 14px 9px;
+  background: var(--brand-soft);
+  border-bottom: 1px solid var(--line);
+}
+.cost-group-head .title { font-size: 15px; font-weight: 700; color: var(--ink); line-height: 1.35; }
+.cost-group-head .sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.cost-group-head .sub b { color: var(--brand-dark); }
+.cost-batch-row { background: #fdf9f1; }
+.cost-batch-row .title { font-size: 13px; }
+
+/* ---------- 流水行：点击查看明细 ---------- */
+.record-row .main { cursor: pointer; }
+.record-row .main:active { opacity: .72; }
+.record-detail { display: flex; flex-direction: column; }
+.record-detail-item {
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+.record-detail-item:last-child { border-bottom: none; }
+.record-detail-k { font-size: 13px; color: var(--ink-3); margin-bottom: 3px; }
+.record-detail-v {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.record-detail-v.good { color: var(--good); }
+.record-detail-v.bad { color: var(--danger); }
