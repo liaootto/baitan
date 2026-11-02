@@ -6,7 +6,7 @@
 
   // ---------- 全局状态 ----------
   // 版本号（和 sw.js 的 CACHE_VERSION 保持一致，改代码时两边一起加 1）
-  const APP_VERSION = 'v27';
+  const APP_VERSION = 'v28';
   let currentTab = 'home';
   let unlocked = false;
   let productSearch = '';
@@ -356,11 +356,11 @@
       '<button class="btn btn-ghost btn-block" data-close style="margin-top:14px">关闭</button>';
   }
 
-  // 明细里的一行：标签在上、数值在下（竖排，手机上好读）。kv = [标签, 数值, 可选颜色类]
+  // 明细里的一行：标签在上、数值在下，样式和资金明细表单一致（只读）。kv = [标签, 数值, 可选颜色类]
   function detailItem(kv) {
     const cls = kv[2] ? ' ' + kv[2] : '';
-    return '<div class="record-detail-item"><div class="record-detail-k">' + kv[0] + '</div>' +
-      '<div class="record-detail-v' + cls + '">' + kv[1] + '</div></div>';
+    return '<div class="field"><label>' + kv[0] + '</label>' +
+      '<div class="field-value' + cls + '">' + kv[1] + '</div></div>';
   }
 
   // ---------- 资金流水明细 ----------
@@ -1379,15 +1379,24 @@
     else if (isSettlement) title = '修改收款收入';
     else if (isTransfer) title = '修改现金转出';
 
-    // 账户：手动记账 / 进货可改；收款、转账的账户由来源固定，只读
-    const acctField = (isSettlement || isTransfer)
-      ? '<div class="field"><label>账户</label><input disabled value="' + accountLabel(f.account) + '"></div>'
-      : '<div class="field"><label>账户</label>' +
+    // 账户：手动记账 / 进货 / 收款都能改；转账的现金方固定、转入方可在微信/支付宝之间改
+    let acctField;
+    if (isTransfer && DB.toNumber(f.amount) < 0) {
+      acctField = '<div class="field"><label>账户（转出方）</label><input disabled value="现金"></div>';
+    } else if (isTransfer) {
+      acctField = '<div class="field"><label>转入账户</label>' +
+        '<div class="segmented" id="fund-edit-acct" style="margin:0">' +
+        '<button type="button" data-a="wechat" class="' + (f.account === 'wechat' ? 'active' : '') + '">微信</button>' +
+        '<button type="button" data-a="alipay" class="' + (f.account === 'alipay' ? 'active' : '') + '">支付宝</button>' +
+        '</div></div>';
+    } else {
+      acctField = '<div class="field"><label>账户</label>' +
         '<div class="segmented" id="fund-edit-acct" style="margin:0">' +
         '<button type="button" data-a="cash" class="' + (f.account === 'cash' ? 'active' : '') + '">现金</button>' +
         '<button type="button" data-a="wechat" class="' + (f.account === 'wechat' ? 'active' : '') + '">微信</button>' +
         '<button type="button" data-a="alipay" class="' + (f.account === 'alipay' ? 'active' : '') + '">支付宝</button>' +
         '</div></div>';
+    }
 
     // 类型：手动记账可切换收入 / 支出，其余固定
     const typeField = isAdjust
@@ -1398,11 +1407,8 @@
         '</div></div>'
       : '<div class="field"><label>类型</label><input disabled value="' + fundCategoryLabel(f) + '"></div>';
 
-    // 收款按日记录，日期固定；其余可改日期
-    const dateField = isSettlement
-      ? '<div class="field"><label>日期</label><input disabled value="' + esc(f.date) + '"></div>' +
-        '<div class="hint">收款按日记录，改日期请到「首页 → 营业额」操作。</div>'
-      : '<div class="field"><label>日期</label><input name="date" type="date" value="' + esc(f.date) + '"></div>';
+    // 日期：都能改（收款改了日期 = 把这一笔挪到那天）
+    const dateField = '<div class="field"><label>日期</label><input name="date" type="date" value="' + esc(f.date) + '"></div>';
 
     // 进货支出额外显示商品信息（数量不改）
     let goodsField = '';
@@ -1457,15 +1463,15 @@
       let note = fd.get('note');
       if (!note) {
         if (isPurchase) note = '进货支出';
-        else if (isSettlement) note = accountLabel(f.account) + '收款';
+        else if (isSettlement) note = accountLabel(acct) + '收款';
         else if (isTransfer) note = '现金转出';
         else note = dir === 'out' ? '支出' : '收入';
       }
       try {
         await DB.updateFundFull(f.id, {
-          account: (isSettlement || isTransfer) ? undefined : acct,
+          account: acct,
           amount: amount,
-          date: isSettlement ? undefined : (fd.get('date') || f.date),
+          date: fd.get('date') || f.date,
           note: note,
         });
       } catch (err) { toast(err.message || '操作失败'); return; }

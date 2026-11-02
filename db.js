@@ -708,24 +708,36 @@
       return f;
     }
 
-    // 收款收入：同步营业额里对应账户的金额；账户/日期固定（按日、按账户记）
+    // 收款收入：账户/金额/日期都可改（把一笔收入从一个账户、一天挪到另一个账户或另一天）
     if (f.category === 'settlement') {
-      const abs = round2(Math.abs(amount));
-      const st = await getSettlement(f.date);
-      if (st) {
-        if (f.account === 'wechat') st.wechat = abs;
-        else if (f.account === 'alipay') st.alipay = abs;
-        else if (f.account === 'cash') st.cashBack = round2(toNumber(st.cashOut) + abs);
-        st.updatedAt = Date.now();
-        await put('settlements', st);
+      const newAbs = round2(Math.abs(amount));
+      // 旧日期旧账户：这一笔先从原账户的营业额里去掉（该账户当天归零）
+      const oldSt = await getSettlement(f.date);
+      if (oldSt) {
+        if (f.account === 'wechat') oldSt.wechat = 0;
+        else if (f.account === 'alipay') oldSt.alipay = 0;
+        else if (f.account === 'cash') oldSt.cashBack = round2(toNumber(oldSt.cashOut)); // 现金收入归零
+        oldSt.updatedAt = Date.now();
+        await put('settlements', oldSt);
       }
-      f.amount = abs;
+      // 新日期新账户：把新金额加到目标账户上
+      let newSt = await getSettlement(date);
+      if (!newSt) newSt = { date: date, cashOut: 0, cashBack: 0, wechat: 0, alipay: 0, note: '' };
+      if (account === 'wechat') newSt.wechat = round2(toNumber(newSt.wechat) + newAbs);
+      else if (account === 'alipay') newSt.alipay = round2(toNumber(newSt.alipay) + newAbs);
+      else if (account === 'cash') newSt.cashBack = round2(toNumber(newSt.cashBack) + newAbs);
+      newSt.updatedAt = Date.now();
+      await put('settlements', newSt);
+      f.account = account;
+      f.amount = newAbs;
+      f.date = date;
       f.note = note;
       await put('funds', f);
       return f;
     }
 
-    // 现金转出：两条流水（现金减少 / 目标账户增加）金额一起改、日期一起改，保持一对
+    // 现金转出：两条流水（现金减少 / 目标账户增加）金额一起改、日期一起改，保持一对；
+    // 转入方可在微信 / 支付宝之间切换（转出方始终是现金）
     if (f.category === 'transfer' && f.refId) {
       const abs = round2(Math.abs(amount));
       const funds = await getAll('funds');
@@ -734,12 +746,13 @@
           const isOut = toNumber(g.amount) < 0;
           g.amount = isOut ? round2(-abs) : abs;
           g.date = date;
+          if (!isOut && (account === 'wechat' || account === 'alipay')) g.account = account;
+          g.note = note;
           await put('funds', g);
         }
       }
-      f.note = note;
-      await put('funds', f);
-      return f;
+      // 返回库里已经写好的那条（id、createdAt 不变）
+      return await getOne('funds', id);
     }
 
     // 手动记账等：直接改

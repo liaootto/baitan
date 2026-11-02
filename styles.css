@@ -492,6 +492,10 @@ main { flex: 1; padding: 14px 14px 20px; }
 .cost-summary b { color: var(--brand-dark); }
 .cost-edit { flex-shrink: 0; padding: 8px 14px; font-size: 14px; }
 
+/* 未编辑时「改」按钮与第一行文字顶部对齐，不浮在多行文字中间 */
+.cost-row:not(.editing) { align-items: flex-start; }
+.cost-row:not(.editing) .cost-edit { margin-top: 2px; }
+
 .cost-row.editing { flex-direction: column; align-items: stretch; }
 .cost-row.editing .cost-side { align-items: flex-start; width: 100%; margin-top: 10px; gap: 8px; }
 .cost-row.editing .cost-amt { align-self: flex-end; font-size: 14px; }
@@ -517,7 +521,7 @@ main { flex: 1; padding: 14px 14px 20px; }
 .cost-row-actions { display: flex; gap: 8px; width: 100%; }
 .cost-row-actions .btn { flex: 1; padding: 10px; font-size: 15px; }
 
-/* 原材料分批次：一个商品一组，组头 + 每批一行 */
+/* 原材料分批次：一个商品一组，组头 + 每批一行（批次行缩进、加左边缘线，明显归属这一组） */
 .cost-group-head {
   padding: 11px 14px 9px;
   background: var(--brand-soft);
@@ -526,26 +530,31 @@ main { flex: 1; padding: 14px 14px 20px; }
 .cost-group-head .title { font-size: 15px; font-weight: 700; color: var(--ink); line-height: 1.35; }
 .cost-group-head .sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
 .cost-group-head .sub b { color: var(--brand-dark); }
-.cost-batch-row { background: #fdf9f1; }
+.cost-batch-row {
+  padding-left: 24px;
+  border-left: 3px solid var(--brand-soft);
+  background: #fdf9f1;
+}
 .cost-batch-row .title { font-size: 13px; }
 
 /* ---------- 流水行：点击查看明细 ---------- */
 .record-row .main { cursor: pointer; }
 .record-row .main:active { opacity: .72; }
+/* 明细弹窗里的一行：和资金明细表单一致，标签在上、数值在带边框的框里（只读） */
 .record-detail { display: flex; flex-direction: column; }
-.record-detail-item {
-  padding: 11px 0;
-  border-bottom: 1px solid var(--line);
-}
-.record-detail-item:last-child { border-bottom: none; }
-.record-detail-k { font-size: 13px; color: var(--ink-3); margin-bottom: 3px; }
-.record-detail-v {
-  font-size: 15px;
-  font-weight: 600;
+.field-value {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-size: 16px;
+  font-family: inherit;
+  background: var(--surface);
   color: var(--ink);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
   line-height: 1.45;
 }
-.record-detail-v.good { color: var(--good); }
-.record-detail-v.bad { color: var(--danger); }
+.field-value.good { color: var(--good); }
+.field-value.bad { color: var(--danger); }

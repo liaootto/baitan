@@ -359,6 +359,26 @@ function assert(cond, msg) {
   assert(DB.toNumber(tfOutAfter.amount) === -300 && DB.toNumber(tfInAfter.amount) === 300, '改转账金额两条一起变');
   assert(tfOutAfter.date === '2026-11-05' && tfInAfter.date === '2026-11-05', '改转账日期两条一起变');
 
+  // 收款收入：账户/日期也能改（把一笔收入从微信、11-06 挪到支付宝、11-08）
+  const stMoveFund = (await DB.listFunds()).find(function (f) { return f.id === stWxFund.id; });
+  await DB.updateFundFull(stMoveFund.id, { account: 'alipay', amount: 600, date: '2026-11-08' });
+  assert(DB.toNumber((await DB.getSettlement('2026-11-06')).wechat) === 0, '旧账户旧日期的微信收款清零');
+  assert(DB.toNumber((await DB.getSettlement('2026-11-08')).alipay) === 600, '新账户新日期的支付宝收款为 600');
+  const stMoveAfter = (await DB.listFunds()).find(function (f) { return f.id === stWxFund.id; });
+  assert(stMoveAfter.account === 'alipay' && stMoveAfter.date === '2026-11-08' && DB.toNumber(stMoveAfter.amount) === 600, '收款账户/日期/金额都能改');
+  assert(stMoveAfter.createdAt === wxCreated, '收款改后时间不变');
+
+  // 现金转出：转入方可从微信改成支付宝，转出方始终是现金
+  const tfIn = tfAfter.find(function (f) { return DB.toNumber(f.amount) > 0; });
+  await DB.updateFundFull(tfIn.id, { account: 'alipay', amount: 350, date: '2026-11-06' });
+  const tfAfter2 = (await DB.listFunds()).filter(function (f) { return f.category === 'transfer' && f.refId === tfRef; });
+  const tfOut2 = tfAfter2.find(function (f) { return DB.toNumber(f.amount) < 0; });
+  const tfIn2 = tfAfter2.find(function (f) { return DB.toNumber(f.amount) > 0; });
+  assert(tfIn2.account === 'alipay', '转账转入账户可改成支付宝');
+  assert(tfOut2.account === 'cash', '转出账户始终是现金');
+  assert(DB.toNumber(tfOut2.amount) === -350 && DB.toNumber(tfIn2.amount) === 350, '改转入方金额两条一起变');
+  assert(tfOut2.date === '2026-11-06' && tfIn2.date === '2026-11-06', '改转入方日期两条一起变');
+
   const saleUnit = await DB.saveProduct({ name: '卖货单位测试', type: 'sellable', costPrice: 2, sellPrice: 5, unit: '串' });
   await DB.addPurchase({ productId: saleUnit.id, quantity: 10, totalCost: 20 });
   const su = await DB.addSale({ productId: saleUnit.id, quantity: 3 });
