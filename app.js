@@ -6,7 +6,7 @@
 
   // ---------- 全局状态 ----------
   // 版本号（和 sw.js 的 CACHE_VERSION 保持一致，改代码时两边一起加 1）
-  const APP_VERSION = 'v28';
+  const APP_VERSION = 'v29';
   let currentTab = 'home';
   let unlocked = false;
   let productSearch = '';
@@ -1410,13 +1410,19 @@
     // 日期：都能改（收款改了日期 = 把这一笔挪到那天）
     const dateField = '<div class="field"><label>日期</label><input name="date" type="date" value="' + esc(f.date) + '"></div>';
 
-    // 进货支出额外显示商品信息（数量不改）
+    // 进货支出额外显示商品信息：商品名固定，数量可改（改数量会同步调库存，进价 = 金额 ÷ 数量）
     let goodsField = '';
     if (isPurchase && f.refId) {
       const purchases = await DB.listPurchases();
       const purchase = purchases.find(function (p) { return p.id === f.refId; });
       if (purchase) {
-        goodsField = '<div class="field"><label>商品（数量不改）</label><input disabled value="' + esc(purchase.productName) + ' ×' + fmtNum(purchase.quantity) + esc(purchase.unit || '件') + '"></div>';
+        const purUnit = esc(purchase.unit || '件');
+        goodsField =
+          '<div class="field"><label>商品</label><input disabled value="' + esc(purchase.productName) + '"></div>' +
+          '<div class="field"><label>数量</label><div class="qty-toggle-row">' +
+          '<input name="quantity" type="number" inputmode="decimal" step="0.001" min="0" value="' + fmtNum(purchase.quantity) + '">' +
+          '<span class="cost-unit">' + purUnit + '</span></div>' +
+          '<div class="hint">改数量会同步调整库存，进价 = 金额 ÷ 数量</div></div>';
       }
     }
 
@@ -1460,6 +1466,11 @@
       if (isAdjust) amount = dir === 'out' ? -amt : amt;
       else if (isPurchase) amount = -amt;
       else amount = amt; // 收款 / 转账用绝对值
+      let quantity;
+      if (isPurchase) {
+        quantity = DB.toNumber(fd.get('quantity'));
+        if (!(quantity > 0)) { toast('请填写大于 0 的数量'); return; }
+      }
       let note = fd.get('note');
       if (!note) {
         if (isPurchase) note = '进货支出';
@@ -1473,6 +1484,7 @@
           amount: amount,
           date: fd.get('date') || f.date,
           note: note,
+          quantity: quantity,
         });
       } catch (err) { toast(err.message || '操作失败'); return; }
       closeModal();

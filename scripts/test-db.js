@@ -337,6 +337,16 @@ function assert(cond, msg) {
   assert(DB.toNumber((await DB.getProduct(fullP.id)).stock) === 5, '进货支出只改金额不改库存');
   assert(DB.toNumber((await DB.getProduct(fullP.id)).costPrice) === 16, '最新进货进价跟着变');
 
+  // 进货支出：数量也能改，库存跟着数量差调整，进价 = 金额 ÷ 数量
+  const qtyP = await DB.saveProduct({ name: '改数量进货', type: 'material', costPrice: 0, unit: '件' });
+  const qtyPur = await DB.addPurchase({ productId: qtyP.id, quantity: 5, totalCost: 50, account: 'cash', date: '2026-11-06' });
+  const qtyFund = (await DB.listFunds()).find(function (f) { return f.category === 'purchase' && f.refId === qtyPur.id; });
+  await DB.updateFundFull(qtyFund.id, { amount: -50, quantity: 8 });
+  const qtyPurAfter = (await DB.listPurchases()).find(function (p) { return p.id === qtyPur.id; });
+  assert(DB.toNumber(qtyPurAfter.quantity) === 8, '进货数量改成 8');
+  assert(DB.toNumber(qtyPurAfter.unitCost) === 6.25, '进价 = 50 ÷ 8 = 6.25');
+  assert(DB.toNumber((await DB.getProduct(qtyP.id)).stock) === 8, '库存从 5 跟着数量变成 8');
+
   // 收款收入：改金额同步到营业额对应账户，时间不变
   await DB.saveSettlement({ date: '2026-11-06', cashOut: 100, cashBack: 600, wechat: 300, alipay: 200, note: '' });
   const stFunds = (await DB.listFunds()).filter(function (f) { return f.category === 'settlement' && f.date === '2026-11-06'; });

@@ -677,27 +677,32 @@
     const date = (o.date !== undefined && o.date !== null) ? o.date : f.date;
     const note = (o.note !== undefined) ? String(o.note || '') : String(f.note || '');
 
-    // 进货支出：同步进货记录（账户、金额→进价、日期），库存数量不动
+    // 进货支出：同步进货记录（账户、金额→进价、日期、数量→库存），库存跟着数量差一起调整
     if (f.category === 'purchase' && f.refId) {
       const pur = await getOne('purchases', f.refId);
       if (pur) {
-        const qty = toNumber(pur.quantity);
+        const oldQty = toNumber(pur.quantity);
+        const newQty = (o.quantity !== undefined && o.quantity !== null) ? round3(toNumber(o.quantity)) : oldQty;
+        if (!(newQty > 0)) throw new Error('数量必须大于 0');
         const total = round2(Math.abs(amount));
         pur.account = account;
         pur.date = date;
+        pur.quantity = newQty;
         pur.totalCost = total;
-        pur.unitCost = qty > 0 ? round2(total / qty) : 0;
+        pur.unitCost = newQty > 0 ? round2(total / newQty) : 0;
         await put('purchases', pur);
         const product = await getProduct(pur.productId);
         if (product) {
+          // 数量从旧值改成新值，库存把差额补/扣回去
+          product.stock = round3(toNumber(product.stock) + newQty - oldQty);
           const all = await getAll('purchases');
           const mine = all.filter(function (p) { return p.productId === pur.productId; });
           const latest = mine.length ? mine.reduce(function (a, b) { return (b.createdAt || 0) > (a.createdAt || 0) ? b : a; }) : null;
           if (latest && latest.id === pur.id) {
             product.costPrice = pur.unitCost;
-            product.updatedAt = Date.now();
-            await put('products', product);
           }
+          product.updatedAt = Date.now();
+          await put('products', product);
         }
       }
       f.account = account;
