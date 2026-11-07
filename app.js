@@ -6,7 +6,7 @@
 
   // ---------- 全局状态 ----------
   // 版本号（和 sw.js 的 CACHE_VERSION 保持一致，改代码时两边一起加 1）
-  const APP_VERSION = 'v30';
+  const APP_VERSION = 'v31';
   let currentTab = 'home';
   let unlocked = false;
   let productSearch = '';
@@ -39,12 +39,6 @@
   function fmtNum(n) {
     const r = Math.round(DB.toNumber(n) * 1000) / 1000;
     return String(r);
-  }
-
-  // 金额：负数写成 -¥100，正数写 ¥100（统一在一处，避免出现 ¥-100）
-  function money(n) {
-    n = DB.toNumber(n);
-    return (n < 0 ? '-¥' : '¥') + fmtMoney(Math.abs(n));
   }
 
   function fmtAxis(n) {
@@ -128,7 +122,9 @@
     root.classList.remove('hidden');
     root.innerHTML =
       '<div class="pin-box">' +
+      '<div class="pin-logo">🔒</div>' +
       '<h2>输入密码</h2>' +
+      '<p>进入摆摊记账</p>' +
       '<input class="pin-input" id="pin-enter" type="password" inputmode="numeric" maxlength="6" placeholder="密码" autocomplete="off">' +
       '<div class="pin-err" id="pin-enter-err"></div>' +
       '<button class="btn btn-primary btn-block" id="pin-enter-ok" style="margin-top:12px">进入</button>' +
@@ -154,6 +150,7 @@
       const isConfirm = step === 2;
       root.innerHTML =
         '<div class="pin-box">' +
+        '<div class="pin-logo">🔑</div>' +
         '<h2>' + (isChange ? '修改密码' : '设置密码') + '</h2>' +
         '<p>' + (isConfirm ? '请再输一次确认' : '输入 4-6 位数字密码') + '</p>' +
         '<input class="pin-input" id="pin-set-input" type="password" inputmode="numeric" maxlength="6" placeholder="' + (isConfirm ? '再输一次' : '密码') + '" autocomplete="off">' +
@@ -196,7 +193,7 @@
     });
     document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
     document.getElementById('view-' + tab).classList.add('active');
-    const titles = { home: '账单', products: '商品', wallet: '钱包', stats: '统计', settings: '设置' };
+    const titles = { home: '摆摊记账', products: '商品', wallet: '钱包', stats: '统计', settings: '设置' };
     document.getElementById('topbar-title').textContent = titles[tab];
     if (tab === 'home') renderHome();
     else if (tab === 'products') renderProducts();
@@ -267,6 +264,7 @@
       '<div class="sub">' + sub + '</div>' +
       '</div>' +
       '<div class="amount ' + cls + '">' + sign + '¥' + fmtMoney(amount) + '</div>' +
+      '<button class="btn btn-danger" data-del-type="' + r.type + '" data-del-id="' + r.id + '" style="padding:6px 11px;font-size:13px">删</button>' +
       '</div>';
   }
 
@@ -279,17 +277,23 @@
       .sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
   }
 
-  // 撤销一条流水（库存跟着同步）：明细弹窗里删，列表上不再放「删」按钮
-  function askDeleteRecord(type, id) {
-    const label = type === 'sale' ? '卖货' : (type === 'consume' ? '消耗' : '进货');
-    const syncText = type === 'purchase' ? '库存会减回去' : '库存会加回去';
-    showConfirm('删除这条「' + label + '」记录？' + syncText + '。', async function () {
-      if (type === 'sale') await DB.deleteSale(id);
-      else if (type === 'consume') await DB.deleteConsumption(id);
-      else await DB.deletePurchase(id);
-      toast('已删除');
-      renderHome(); renderProducts(); renderStats();
-      renderAllRecordsList();
+  // 给流水列表里的「删」按钮绑定撤销逻辑（删除记录 + 同步库存）
+  function bindDeleteRecord(container, inModal) {
+    container.querySelectorAll('[data-del-type]').forEach(function (b) {
+      b.onclick = function () {
+        const type = b.dataset.delType;
+        const id = b.dataset.delId;
+        const label = type === 'sale' ? '卖货' : (type === 'consume' ? '消耗' : '进货');
+        const syncText = type === 'purchase' ? '进货会减回库存' : (type === 'sale' ? '卖货会加回库存' : '消耗会加回库存');
+        showConfirm('删除这条「' + label + '」记录？' + syncText + '。', async function () {
+          if (type === 'sale') await DB.deleteSale(id);
+          else if (type === 'consume') await DB.deleteConsumption(id);
+          else await DB.deletePurchase(id);
+          toast('已删除');
+          renderHome(); renderProducts(); renderStats();
+          if (inModal) renderAllRecordsList();
+        });
+      };
     });
   }
 
@@ -316,8 +320,9 @@
 
     const isMaterial = (r.productType === 'material') || (product && product.type === 'material');
     let title = '卖出明细';
-    if (type === 'purchase') title = '进货明细';
-    else if (type === 'consume') title = '消耗明细';
+    let emoji = '💰';
+    if (type === 'purchase') { title = '进货明细'; emoji = '🛒'; }
+    else if (type === 'consume') { title = '消耗明细'; emoji = '🧮'; }
     const typeBadge = isMaterial ? '<span class="badge soon">原材料</span>' : '<span class="badge ok">成品</span>';
 
     const rows = [];
@@ -346,10 +351,9 @@
     if (r.note) rows.push(['备注', esc(r.note)]);
 
     return '<button class="modal-close" data-close>×</button>' +
-      '<h3>' + title + '</h3>' +
+      '<h3>' + emoji + ' ' + title + '</h3>' +
       '<div class="record-detail">' + rows.map(detailItem).join('') + '</div>' +
-      '<button class="btn btn-danger btn-block" id="rec-detail-del" style="margin-top:12px">删除这条记录</button>' +
-      '<button class="btn btn-ghost btn-block" data-close style="margin-top:8px">关闭</button>';
+      '<button class="btn btn-ghost btn-block" data-close style="margin-top:14px">关闭</button>';
   }
 
   // 明细里的一行：标签在上、数值在下，样式和资金明细表单一致（只读）。kv = [标签, 数值, 可选颜色类]
@@ -382,13 +386,13 @@
     let product = null;
     try { product = await DB.getProduct(r.productId); } catch (err) {}
     openModal(recordDetailHtml(r, product));
-    document.getElementById('rec-detail-del').onclick = function () { askDeleteRecord(type, id); };
   }
 
   async function openAllRecords() {
     openModal(
       '<button class="modal-close" data-close>×</button>' +
       '<h3>全部流水</h3>' +
+      '<div class="hint" style="margin-bottom:10px">点「删」可撤销该条（对应库存会自动同步）</div>' +
       '<div class="list" id="all-records-list"></div>'
     );
     await renderAllRecordsList();
@@ -399,20 +403,19 @@
     if (!listEl) return;
     const recs = await getAllRecords();
     listEl.innerHTML = recs.length ? recs.map(recordRow).join('') : '<div class="empty"><p>还没有流水</p></div>';
+    bindDeleteRecord(listEl, true);
     bindRecordDetail(listEl);
   }
 
   async function renderHome() {
     const el = document.getElementById('view-home');
     const date = reconcileDate || DB.todayStr();
-    const isToday = date === DB.todayStr();
-    const [settlement, consumptions, adjustments, products, purchases, funds] = await Promise.all([
+    const [settlement, consumptions, adjustments, products, purchases] = await Promise.all([
       DB.getSettlement(date),
       DB.listConsumptions(),
       DB.listAdjustments(),
       DB.listProducts(),
       DB.listPurchases(),
-      DB.listFunds(),
     ]);
     const dayCons = consumptions.filter(function (c) { return c.date === date; });
     const usageByProduct = {}; // 未指定批次的今日用量（成品 / 无进货记录的原材料）
@@ -438,38 +441,34 @@
     dayCons.forEach(function (c) { cost += DB.toNumber(c.cost); });
     const profit = revenue - cost;
 
-    const dayFunds = funds.filter(function (f) { return f.date === date; });
-
     el.innerHTML =
-      '<div class="date-nav">' +
-      '<button class="date-step" id="rec-prev" aria-label="前一天">‹</button>' +
-      '<input class="date-input" id="rec-date" type="date" value="' + date + '">' +
-      '<button class="date-step" id="rec-next" aria-label="后一天">›</button>' +
-      (isToday ? '' : '<button class="date-today" id="rec-today">今天</button>') +
-      '</div>' +
+      '<div class="field" style="margin-bottom:12px"><label>核算日期</label><input type="date" id="rec-date" value="' + date + '"></div>' +
 
-      '<div class="hero">' +
-      '<div class="hero-label">利润</div>' +
-      '<div class="hero-value">' + money(profit) + '</div>' +
-      '<div class="hero-sub">营业额 ' + money(revenue) + ' − 成本 ' + money(cost) + '</div>' +
+      '<div class="hero" style="margin-bottom:12px">' +
+      '<div class="hero-label">' + date + ' · 利润核算</div>' +
+      '<div class="hero-value">¥' + fmtMoney(profit) + '</div>' +
+      '<div class="hero-sub">营业额 ¥' + fmtMoney(revenue) + ' − 成本 ¥' + fmtMoney(cost) + '</div>' +
       '</div>' +
 
       '<div class="card">' +
-      '<div class="card-title">营业额</div>' +
-      '<div class="sum-grid">' +
-      '<div class="field"><label>带出</label><input id="rec-cashout" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(settlement && settlement.cashOut) + '" placeholder="0"></div>' +
-      '<div class="field"><label>带回</label><input id="rec-cashback" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(settlement && settlement.cashBack) + '" placeholder="0"></div>' +
-      '<div class="field"><label>微信</label><input id="rec-wechat" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(settlement && settlement.wechat) + '" placeholder="0"></div>' +
-      '<div class="field"><label>支付宝</label><input id="rec-alipay" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(settlement && settlement.alipay) + '" placeholder="0"></div>' +
+      '<div class="card-title">营业额（今天收了多少）</div>' +
+      '<div class="field"><label>带出现金（出门带的钱）</label>' +
+      '<div class="qty-toggle-row"><input id="rec-cashout" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(settlement && settlement.cashOut) + '" placeholder="0">' +
+      '<button class="btn btn-secondary" id="rec-save-cashout" type="button" style="flex:0 0 auto;padding:10px 14px">单独保存</button></div></div>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>微信收款</label><input id="rec-wechat" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(settlement && settlement.wechat) + '" placeholder="0"></div>' +
+      '<div class="field"><label>支付宝收款</label><input id="rec-alipay" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(settlement && settlement.alipay) + '" placeholder="0"></div>' +
       '</div>' +
-      '<div class="field" style="margin:10px 0 0"><label>备注</label><input id="rec-note" value="' + esc(settlement ? settlement.note : '') + '" placeholder="选填"></div>' +
-      '<div class="sum-line"><span>现金</span><b id="rec-live-cash">¥0</b><span>合计</span><b id="rec-live-rev">¥0</b></div>' +
-      '<button class="btn btn-primary btn-block" id="rec-save" style="margin-top:12px">保存</button>' +
+      '<div class="field"><label>带回现金（收摊剩的钱）</label><input id="rec-cashback" type="number" inputmode="decimal" step="0.01" min="0" value="' + valOrEmpty(settlement && settlement.cashBack) + '" placeholder="0"></div>' +
+      '<div class="field"><label>备注</label><input id="rec-note" value="' + esc(settlement ? settlement.note : '') + '" placeholder="选填"></div>' +
+      '<button class="btn btn-primary btn-block" id="rec-save">保存营业额</button>' +
+      '<div class="hint" style="margin-top:8px">现金收入 = 带回现金 − 带出现金</div>' +
+      '<div id="rec-live-rev" style="margin-top:10px;padding:10px 12px;background:var(--brand-soft);border-radius:10px;font-size:14px;color:var(--ink-2)"></div>' +
       '</div>' +
 
       '<div class="card">' +
-      '<div class="card-title">成本</div>' +
-      '<div class="list list-flush" id="cost-fill-list">' +
+      '<div class="card-title">成本（今天用掉 / 卖掉的量）</div>' +
+      '<div class="list" id="cost-fill-list">' +
       (products.length
         ? products.map(function (p) {
             const batches = (purchasesByProduct[p.id] || []).sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
@@ -478,41 +477,28 @@
             }
             return costFillRow(p, usageByProduct[p.id]);
           }).join('')
-        : '<div class="empty"><p>还没有商品</p></div>') +
+        : '<div class="empty"><p>还没有商品，先到「商品」添加</p></div>') +
       '</div>' +
+      '<div class="hint" style="margin-top:8px">每行点「改」改今天的用量：框里可填总数，也可填「+5 / −3」在已记用量上加 5、减 3（改前用量会一直显示在上面，不会忘）；改完点「保存」。原材料如果分几批进货，会按每批的进价分开记用量。</div>' +
       (dayAdj.length
-        ? '<div class="list list-flush" style="margin-top:8px">' + dayAdj.map(function (a) {
+        ? '<div style="margin-top:8px"><div class="hint">盘点校正：</div>' + dayAdj.map(function (a) {
             const d = DB.toNumber(a.delta);
             const txt = (a.weightQty != null && DB.toNumber(a.weightQty) > 0) ? fmtNum(a.weightQty) + esc(a.specUnit || '克') : String(a.after) + '件';
-            return '<div class="list-item"><div class="main"><div class="title">' + esc(a.productName) + '</div>' +
-              '<div class="sub">盘点 ' + txt + ' · ' + (d >= 0 ? '+' : '') + fmtNum(d) + ' 件</div></div></div>';
+            return '<div class="hint">' + esc(a.productName) + ' → 实际 ' + txt + '（' + (d >= 0 ? '+' : '') + fmtNum(d) + '件）</div>';
           }).join('') + '</div>'
         : '') +
-      '<button class="btn btn-ghost btn-block" id="rec-adjust" style="margin-top:10px">盘点校正</button>' +
-      '</div>' +
-
-      '<div class="section-head"><span class="t">资金流水</span></div>' +
-      (dayFunds.length
-        ? '<div class="list">' + dayFunds.map(fundRow).join('') + '</div>'
-        : '<div class="card"><div class="empty"><p>没有记录</p></div></div>');
+      '<button class="btn btn-ghost btn-block" id="rec-adjust" style="margin-top:12px">⚖️ 盘点校正（改实际库存）</button>' +
+      '</div>';
 
     el.querySelector('#rec-date').onchange = function (e) { reconcileDate = e.target.value; renderHome(); };
-    el.querySelector('#rec-prev').onclick = function () {
-      reconcileDate = DB.localDateStr(DB.addDays(DB.parseDateStr(date), -1));
-      renderHome();
-    };
-    el.querySelector('#rec-next').onclick = function () {
-      reconcileDate = DB.localDateStr(DB.addDays(DB.parseDateStr(date), 1));
-      renderHome();
-    };
-    const todayBtn = el.querySelector('#rec-today');
-    if (todayBtn) todayBtn.onclick = function () { reconcileDate = DB.todayStr(); renderHome(); };
 
     function liveRev() {
       const cash = DB.toNumber(el.querySelector('#rec-cashback').value) - DB.toNumber(el.querySelector('#rec-cashout').value);
       const rev = cash + DB.toNumber(el.querySelector('#rec-wechat').value) + DB.toNumber(el.querySelector('#rec-alipay').value);
-      el.querySelector('#rec-live-cash').textContent = money(cash);
-      el.querySelector('#rec-live-rev').textContent = money(rev);
+      el.querySelector('#rec-live-rev').textContent = '本日营业额：¥' + fmtMoney(rev) +
+        '（微信 ¥' + fmtMoney(DB.toNumber(el.querySelector('#rec-wechat').value)) +
+        ' · 支付宝 ¥' + fmtMoney(DB.toNumber(el.querySelector('#rec-alipay').value)) +
+        ' · 现金 ¥' + fmtMoney(cash) + '）';
     }
     ['#rec-cashout', '#rec-cashback', '#rec-wechat', '#rec-alipay'].forEach(function (id) {
       el.querySelector(id).addEventListener('input', liveRev);
@@ -528,7 +514,21 @@
         alipay: el.querySelector('#rec-alipay').value,
         note: el.querySelector('#rec-note').value,
       });
-      toast('已保存');
+      toast('营业额已保存');
+      renderHome();
+    };
+
+    // 带出现金可单独保存（早上先记带出，不用等其他几项）
+    el.querySelector('#rec-save-cashout').onclick = async function () {
+      await DB.saveSettlement({
+        date: date,
+        cashOut: el.querySelector('#rec-cashout').value,
+        cashBack: settlement ? settlement.cashBack : '',
+        wechat: settlement ? settlement.wechat : '',
+        alipay: settlement ? settlement.alipay : '',
+        note: settlement ? settlement.note : '',
+      });
+      toast('带出现金已保存');
       renderHome();
     };
 
@@ -599,8 +599,6 @@
       if (!hasMaterials) { toast('请先添加原材料'); return; }
       openAdjustForm(null, date);
     };
-
-    bindFundDetail(el);
   }
 
   // 成本栏：输入/加减后实时刷新该行的「金额」和「剩余库存」
@@ -634,7 +632,7 @@
     if (p.alertThreshold !== null && p.alertThreshold !== undefined && p.stock <= alertThresholdPieces(p)) {
       return '<span class="badge low">不足</span>';
     }
-    return '';
+    return '<span class="badge ok">正常</span>';
   }
 
   function productRow(p) {
@@ -679,7 +677,7 @@
       '<div class="field" style="margin-bottom:0"><label>使用账户</label><select data-paccount>' + accountOpts + '</select></div>' +
       '<div class="field" style="margin-bottom:0"><label>总金额（元）</label><input type="number" inputmode="decimal" step="0.01" min="0" data-ptotal value="' + (unitCost || '') + '"></div>' +
       '</div>' +
-      '<div class="field" style="margin-top:10px;margin-bottom:0"><label>日期</label><input type="date" data-pdate value="' + DB.todayStr() + '"></div>' +
+      '<div class="field" style="margin-top:10px;margin-bottom:0"><label>日期</label><input type="date" data-pdate value="' + DB.todayStr() + '"><div class="hint">前几天忘记了，选那天补上</div></div>' +
       '<div class="field-row" style="margin-top:12px">' +
       '<button class="btn btn-primary btn-block" data-pok>进货</button>' +
       '<button class="btn btn-ghost btn-block" data-pcancel>取消</button>' +
@@ -714,7 +712,7 @@
         '<div class="section-head" style="margin-top:4px"><span class="t">库存预警</span><span class="badge ' + (alerts.length ? 'out' : 'ok') + '">' + alerts.length + ' 项</span></div>' +
         (alerts.length
           ? '<div class="list">' + alerts.slice(0, 8).map(alertRow).join('') + '</div>'
-          : '<div class="card"><div class="empty"><p>库存都够</p></div></div>') +
+          : '<div class="card"><div class="empty"><p>暂无库存预警 🎉</p></div></div>') +
         '<div class="section-head" style="margin-top:16px"><span class="t">最近流水</span><button class="more" id="qa-all-records">查看全部</button></div>' +
         (recents.length
           ? '<div class="list">' + recents.map(recordRow).join('') + '</div>'
@@ -722,11 +720,11 @@
     }
 
     el.innerHTML =
-      '<div class="field" style="margin-bottom:10px"><input id="product-search" type="search" placeholder="搜索" value="' + esc(productSearch) + '"></div>' +
+      '<div class="field" style="margin-bottom:10px"><input id="product-search" type="search" placeholder="搜索商品名称" value="' + esc(productSearch) + '"></div>' +
       (list.length
         ? '<div class="list">' + list.map(productRow).join('') + '</div>'
-        : '<div class="card"><div class="empty"><p>' + (products.length ? '没有找到' : '还没有商品') + '</p></div></div>') +
-      '<button class="btn btn-primary btn-block btn-lg" id="add-product" style="margin-top:12px">新增商品</button>' +
+        : '<div class="card"><div class="empty"><div class="empty-ico">📦</div><p>' + (products.length ? '没有找到匹配的商品' : '还没有商品，点下方按钮添加') + '</p></div></div>') +
+      '<button class="btn btn-primary btn-block btn-lg" id="add-product" style="margin-top:12px">＋ 新增商品</button>' +
       extrasHtml;
 
     const searchEl = el.querySelector('#product-search');
@@ -788,6 +786,7 @@
       el.querySelectorAll('[data-alert-product]').forEach(function (r) {
         r.onclick = function () { openProductFormById(r.dataset.alertProduct); };
       });
+      bindDeleteRecord(el, false);
       bindRecordDetail(el);
     }
   }
@@ -841,7 +840,7 @@
       '<div class="field"><label>规格（每件重量）</label><input name="spec" type="number" inputmode="decimal" step="0.001" min="0" value="' + valOrEmpty(product && product.spec) + '" placeholder="如 250"></div>' +
       '<div class="field"><label>规格单位</label><select name="specUnit">' + specUnitOptions + '</select></div>' +
       '</div>' +
-      (isEdit ? '' : '<div class="field"><label>初始库存</label><input name="initStock" type="number" inputmode="numeric" min="0" value="0"></div>') +
+      (isEdit ? '' : '<div class="field"><label>初始库存</label><input name="initStock" type="number" inputmode="numeric" min="0" value="0"><div class="hint">填了初始库存会自动记一条进货</div></div>') +
       '<button class="btn btn-primary btn-block btn-lg" type="submit">保存</button>' +
       (isEdit ? '<button class="btn btn-danger btn-block" type="button" id="del-product" style="margin-top:10px">删除该商品</button>' : '') +
       '</form>'
@@ -1035,7 +1034,7 @@
       '<button type="button" data-mode="piece" class="active">件</button>' +
       '<button type="button" data-mode="weight">克</button>' +
       '</div></div>' +
-      '</div>' +
+      '<div class="hint">按进价自动算成本</div></div>' +
       '<div class="field"><label>日期</label><input name="date" type="date" value="' + (presetDate || DB.todayStr()) + '"></div>' +
       '<div class="field"><label>备注</label><input name="note" placeholder="选填"></div>' +
       '<div id="consume-cost" style="text-align:right;font-size:18px;font-weight:700;margin-bottom:12px"></div>' +
@@ -1292,7 +1291,7 @@
       '<div class="field"><label id="adjust-qty-label">实际剩余（件）*</label><input name="actualQty" id="adjust-qty" type="number" inputmode="decimal" step="0.001" min="0" required></div>' +
       '<div class="field"><label>日期</label><input name="date" type="date" value="' + (presetDate || DB.todayStr()) + '"></div>' +
       '<div class="field"><label>备注</label><input name="note" placeholder="如：称重校正"></div>' +
-      '' +
+      '<div class="hint" style="margin-bottom:12px">只改库存数字，不会计入当天成本</div>' +
       '<button class="btn btn-primary btn-block btn-lg" type="submit">保存校正</button>' +
       '</form>'
     );
@@ -1346,12 +1345,19 @@
     const sign = pos ? '+' : '-';
     const cat = f.category === 'purchase' ? '进货支出' : (f.category === 'settlement' ? '收款收入' : (f.category === 'transfer' ? '现金转出' : '手动记账'));
     return '<div class="list-item record-row">' +
-      '<div class="main" data-fund-id="' + f.id + '">' +
+      '<div class="main" data-fund-id="' + f.id + '" title="点此查看明细">' +
       '<div class="title">' + accountLabel(f.account) + ' · ' + esc(f.note || cat) + '</div>' +
       '<div class="sub">' + cat + ' · ' + esc(f.date) + ' · ' + fmtDateTime(f.createdAt) + '</div>' +
       '</div>' +
       '<div class="amount ' + cls + '">' + sign + '¥' + fmtMoney(Math.abs(DB.toNumber(f.amount))) + '</div>' +
+      '<button class="btn btn-secondary" data-edit-fund="' + f.id + '" data-cat="' + (f.category || '') + '" style="padding:6px 11px;font-size:13px">改</button>' +
       '</div>';
+  }
+
+  function bindEditFund(container) {
+    container.querySelectorAll('[data-edit-fund]').forEach(function (b) {
+      b.onclick = function () { openFundEdit(b.dataset.editFund); };
+    });
   }
 
   // 点资金流水那一行（或「改」按钮）进入修改：所有类型都能改金额等关键数据、都能删除，改后时间不变。
@@ -1416,7 +1422,7 @@
           '<div class="field"><label>数量</label><div class="qty-toggle-row">' +
           '<input name="quantity" type="number" inputmode="decimal" step="0.001" min="0" value="' + fmtNum(purchase.quantity) + '">' +
           '<span class="cost-unit">' + purUnit + '</span></div>' +
-          '</div>';
+          '<div class="hint">改数量会同步调整库存，进价 = 金额 ÷ 数量</div></div>';
       }
     }
 
@@ -1428,6 +1434,7 @@
       '<div class="field"><label>金额（元）*</label><input name="amount" type="number" inputmode="decimal" step="0.01" min="0" required value="' + abs + '"></div>' +
       goodsField + dateField +
       '<div class="field"><label>备注</label><input name="note" value="' + esc(f.note) + '" placeholder="选填"></div>' +
+      '<div class="hint" style="margin-bottom:12px">保存后记录时间不变（仍是 ' + fmtDateTime(f.createdAt) + '）</div>' +
       '<button class="btn btn-primary btn-block btn-lg" type="submit">保存修改</button>' +
       '</form>' +
       '<button class="btn btn-danger btn-block" id="fund-delete-btn" style="margin-top:12px">删除这条记录</button>'
@@ -1516,19 +1523,21 @@
       '<div class="stat-tile"><div class="stat-label">支付宝</div><div class="stat-value">¥' + fmtMoney(bal.alipay) + '</div></div>' +
       '</div>' +
       '<div class="hero" style="margin-bottom:10px">' +
-      '<div class="hero-label">合计</div>' +
-      '<div class="hero-value">' + money(total) + '</div>' +
+      '<div class="hero-label">三账户汇总（现金 + 微信 + 支付宝）</div>' +
+      '<div class="hero-value">¥' + fmtMoney(total) + '</div>' +
       '</div>' +
-      '<button class="btn btn-primary btn-block" id="fund-add">记一笔</button>' +
-      '<button class="btn btn-ghost btn-block" id="fund-transfer" style="margin-top:8px">现金转出</button>' +
+      '<div class="hint" style="margin-top:6px">余额 = 收款收入 − 进货支出 + 手动记的账。每天的带出现金 / 带回现金会算进「现金」账户。</div>' +
+      '<button class="btn btn-primary btn-block" id="fund-add" style="margin-top:10px">＋ 记一笔</button>' +
+      '<button class="btn btn-ghost btn-block" id="fund-transfer" style="margin-top:8px">💸 现金转出（转到微信 / 支付宝）</button>' +
       '</div>' +
-      '<div class="section-head"><span class="t">资金流水</span></div>' +
+      '<div class="section-head" style="margin-top:4px"><span class="t">资金流水</span></div>' +
       (funds.length
         ? '<div class="list">' + funds.map(fundRow).join('') + '</div>'
-        : '<div class="card"><div class="empty"><p>还没有记录</p></div></div>');
+        : '<div class="card"><div class="empty"><p>还没有资金记录</p></div></div>');
 
     el.querySelector('#fund-add').onclick = function () { openFundForm(); };
     el.querySelector('#fund-transfer').onclick = function () { openTransferForm(); };
+    bindEditFund(el);
     bindFundDetail(el);
   }
 
@@ -1592,6 +1601,7 @@
     openModal(
       '<button class="modal-close" data-close>×</button>' +
       '<h3>现金转出</h3>' +
+      '<p class="hint" style="margin:0 0 10px">把现金转到微信或支付宝：现金减少、目标账户增加，三账户总额不变。</p>' +
       '<form id="transfer-form">' +
       '<div class="field"><label>转到哪里</label>' +
       '<div class="segmented" id="transfer-to-seg" style="margin:0">' +
@@ -1706,20 +1716,26 @@
       '<button data-p="month" class="' + (statsPeriod === 'month' ? 'active' : '') + '">本月</button>' +
       '</div>' +
       '<div class="hero">' +
-      '<div class="hero-label">' + periodLabel(statsPeriod) + ' · 利润</div>' +
-      '<div class="hero-value">' + money(profit) + '</div>' +
-      '<div class="hero-sub">营业额 ' + money(revenue) + ' − 成本 ' + money(cost) + '</div>' +
+      '<div class="hero-label">' + periodLabel(statsPeriod) + ' · 营业额（核算）</div>' +
+      '<div class="hero-value">¥' + fmtMoney(revenue) + '</div>' +
+      '<div class="hero-sub">营业额 ¥' + fmtMoney(revenue) + ' − 成本 ¥' + fmtMoney(cost) + ' · 利润 <strong style="color:' + (profit >= 0 ? 'var(--good)' : 'var(--danger)') + '">¥' + fmtMoney(profit) + '</strong></div>' +
+      '</div>' +
+      '<div class="stat-grid">' +
+      '<div class="stat-tile"><div class="stat-label">营业额</div><div class="stat-value">¥' + fmtMoney(revenue) + '</div></div>' +
+      '<div class="stat-tile"><div class="stat-label">成本</div><div class="stat-value">¥' + fmtMoney(cost) + '</div></div>' +
+      '<div class="stat-tile"><div class="stat-label">利润</div><div class="stat-value ' + (profit >= 0 ? 'good' : 'bad') + '">¥' + fmtMoney(profit) + '</div></div>' +
       '</div>' +
       '<div class="card chart-card">' +
-      '<div class="card-title">营业额</div>' +
+      '<div class="card-title">每日营业额</div>' +
       '<div id="chart-box"></div>' +
+      '<div style="text-align:center;font-size:12px;color:var(--ink-3);margin-top:4px">点柱子看当天详情</div>' +
       '</div>' +
       '<div class="card">' +
       '<div class="card-title">每日明细</div>' +
       buildDailyTable(daysArr) +
       '</div>' +
       '<div class="card">' +
-      '<div class="card-title">畅销商品</div>' +
+      '<div class="card-title">卖得最好的商品（按「卖货」记录）</div>' +
       buildTopProducts(topProducts, maxTop) +
       '</div>';
 
@@ -1727,16 +1743,13 @@
     el.querySelectorAll('#stats-period button').forEach(function (b) {
       b.onclick = function () { statsPeriod = b.dataset.p; statsSelected = -1; renderStats(); };
     });
-    el.querySelectorAll('.table-mini tr[data-day]').forEach(function (tr) {
-      tr.onclick = function () { reconcileDate = tr.dataset.day; showTab('home'); };
-    });
   }
 
   function buildDailyTable(daysArr) {
     const rows = daysArr.slice().reverse();
     return '<table class="table-mini"><tr><th>日期</th><th>营业额</th><th>成本</th><th>利润</th></tr>' +
       rows.map(function (d) {
-        return '<tr data-day="' + esc(d.date) + '"><td>' + esc(d.date) + '</td><td>' + money(d.revenue) + '</td><td>' + money(d.cost) + '</td><td>' + money(d.profit) + '</td></tr>';
+        return '<tr><td>' + esc(d.date) + '</td><td>¥' + fmtMoney(d.revenue) + '</td><td>¥' + fmtMoney(d.cost) + '</td><td>¥' + fmtMoney(d.profit) + '</td></tr>';
       }).join('') + '</table>';
   }
 
@@ -1842,31 +1855,32 @@
 
     el.innerHTML =
       '<div class="card">' +
-      '<div class="card-title">备份</div>' +
-      '<div class="list list-flush">' +
-      '<div class="list-item"><div class="main"><div class="title">导出备份</div><div class="sub">存成文件，用微信发到另一台手机</div></div><button class="btn btn-secondary" id="set-export">导出</button></div>' +
-      '<div class="list-item"><div class="main"><div class="title">导入备份</div><div class="sub">会覆盖当前数据</div></div>' +
+      '<div class="card-title">数据备份与同步</div>' +
+      '<div class="list">' +
+      '<div class="list-item"><div class="main"><div class="title">导出备份</div><div class="sub">把全部数据存成一个文件，发微信同步到另一台手机</div></div><button class="btn btn-secondary" id="set-export">导出</button></div>' +
+      '<div class="list-item"><div class="main"><div class="title">显示备份文字（万能备用）</div><div class="sub">把备份变成一段文字，复制后用微信发给另一台手机</div></div><button class="btn btn-ghost" id="set-export-text">查看</button></div>' +
+      '<div class="list-item"><div class="main"><div class="title">导入备份</div><div class="sub">从文件恢复数据（会覆盖当前数据）</div></div>' +
       '<label class="btn btn-secondary" for="import-file" style="margin:0">导入</label>' +
       '<input type="file" id="import-file" accept="*/*" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">' +
       '</div>' +
-      '<div class="list-item"><div class="main"><div class="title">备份文字</div><div class="sub">复制发微信，对方粘贴导入</div></div><button class="btn btn-ghost" id="set-export-text">查看</button></div>' +
-      '<div class="list-item"><div class="main"><div class="title">粘贴导入</div><div class="sub">选文件没反应时用</div></div><button class="btn btn-ghost" id="set-import-text">粘贴</button></div>' +
-      (hasUndo ? '<div class="list-item"><div class="main"><div class="title">撤销上次导入</div></div><button class="btn btn-ghost" id="set-undo">撤销</button></div>' : '') +
+      '<div class="list-item"><div class="main"><div class="title">粘贴备份内容（备用）</div><div class="sub">选文件没反应时用这个：把备份文件的文字粘贴进来</div></div><button class="btn btn-ghost" id="set-import-text">粘贴</button></div>' +
+      (hasUndo ? '<div class="list-item"><div class="main"><div class="title">撤销上次导入</div><div class="sub">恢复到导入之前的数据</div></div><button class="btn btn-ghost" id="set-undo">撤销</button></div>' : '') +
       (lastBackup ? '<div class="list-item"><div class="main"><div class="title">上次导出</div><div class="sub">' + esc(new Date(lastBackup).toLocaleString('zh-CN')) + '</div></div></div>' : '') +
       '</div>' +
-      '<div class="card-title" style="margin:12px 0 0">小米手机导入没反应，就用手机浏览器打开 liaootto.github.io/baitan 再导入。</div>' +
+      '<div class="hint" style="margin-top:8px">小米手机点「导入」没反应？那是桌面图标的问题：用手机自带的浏览器打开 liaootto.github.io/baitan 再导入，数据是一样的，导完图标里也能看到。</div>' +
       '</div>' +
       '<div class="card">' +
       '<div class="card-title">安全</div>' +
-      '<div class="list list-flush">' +
-      '<div class="list-item"><div class="main"><div class="title">' + (hasPin ? '修改密码' : '打开密码') + '</div></div><button class="btn btn-secondary" id="set-pin">' + (hasPin ? '修改' : '设置') + '</button></div>' +
-      (hasPin ? '<div class="list-item"><div class="main"><div class="title">立即锁定</div></div><button class="btn btn-ghost" id="set-lock">锁定</button></div>' : '') +
+      '<div class="list">' +
+      '<div class="list-item"><div class="main"><div class="title">' + (hasPin ? '修改密码' : '设置打开密码') + '</div><div class="sub">' + (hasPin ? '已开启密码保护' : '设置后每次打开需要输入') + '</div></div><button class="btn btn-secondary" id="set-pin">' + (hasPin ? '修改' : '设置') + '</button></div>' +
+      (hasPin ? '<div class="list-item"><div class="main"><div class="title">立即锁定</div><div class="sub">退出到密码界面</div></div><button class="btn btn-ghost" id="set-lock">锁定</button></div>' : '') +
       '</div></div>' +
       '<div class="card">' +
-      '<div class="list list-flush">' +
-      '<div class="list-item"><div class="main"><div class="title">使用说明</div></div><button class="btn btn-ghost" id="set-help">查看</button></div>' +
+      '<div class="card-title">帮助</div>' +
+      '<div class="list">' +
+      '<div class="list-item"><div class="main"><div class="title">使用说明</div><div class="sub">怎么记账、怎么两台手机同步</div></div><button class="btn btn-ghost" id="set-help">查看</button></div>' +
       '</div></div>' +
-      '<p style="text-align:center;font-size:12px;color:var(--ink-3);margin:4px 0 0">' + APP_VERSION + '</p>';
+      '<p style="text-align:center;font-size:12px;color:var(--ink-3)">摆摊记账 · 数据只保存在本机 · 版本 ' + APP_VERSION + '</p>';
 
     el.querySelector('#set-export').onclick = doExport;
     el.querySelector('#set-import-text').onclick = openImportText;
@@ -1944,7 +1958,7 @@
       openModal(
         '<button class="modal-close" data-close>×</button>' +
         '<h3>备份文字</h3>' +
-        '<div class="hint" style="margin-bottom:8px">复制后发微信，对方在「粘贴导入」里粘进去。</div>' +
+        '<div class="hint" style="margin-bottom:8px">点下面「复制全部」，用微信发给自己或另一台手机；对方在「粘贴备份内容（备用）」里粘进去就能导入。</div>' +
         '<textarea id="backup-text" readonly rows="10" style="width:100%;font-size:11px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface);color:var(--ink);font-family:monospace">' + esc(text) + '</textarea>' +
         '<button class="btn btn-primary btn-block" id="backup-text-copy" style="margin-top:10px">复制全部</button>'
       );
@@ -1975,7 +1989,7 @@
     openModal(
       '<button class="modal-close" data-close>×</button>' +
       '<h3>粘贴备份内容</h3>' +
-      '<div class="hint" style="margin-bottom:8px">粘贴备份文件的全部文字（以 { 开头）。</div>' +
+      '<div class="hint" style="margin-bottom:8px">打开备份文件，把里面<b>全部文字</b>复制下来（一般以 { 开头），粘贴到下面的框里，再点「导入」。</div>' +
       '<textarea id="import-text" rows="8" style="width:100%;font-size:12px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface);color:var(--ink);font-family:monospace" placeholder="在这里粘贴备份内容…"></textarea>' +
       '<button class="btn btn-primary btn-block btn-lg" id="import-text-ok" style="margin-top:12px">导入</button>'
     );
@@ -1998,19 +2012,19 @@
   }
 
   function showHelp() {
-    const item = function (h, p) {
-      return '<div class="field"><label>' + h + '</label><div class="field-value">' + p + '</div></div>';
-    };
     openModal(
       '<button class="modal-close" data-close>×</button>' +
       '<h3>使用说明</h3>' +
-      item('账单', '用日期左右切换看那天的账。填带出、带回、微信、支付宝，点「保存」。') +
-      item('成本', '每行点「改」填当天用量，可填总数，也可填 +5 / −3。') +
-      item('商品', '点「进」进货、「卖」卖出、「用」领用，库存自动跟着变。') +
-      item('钱包', '三个账户的余额和流水，点任意一条可修改。') +
-      item('统计', '每天的营业额、成本、利润，点一行跳到那天账单。') +
-      item('两台手机', '导出备份 → 微信发给另一台 → 导入备份。小米手机选不了文件时，用手机浏览器打开 liaootto.github.io/baitan 再导入。') +
-      '<button class="btn btn-ghost btn-block" data-close style="margin-top:4px">关闭</button>'
+      '<div style="font-size:14px;color:var(--ink-2);line-height:1.9">' +
+      '<p style="margin:0 0 8px"><strong>1. 每日利润核算（重要）</strong><br>就在「首页」直接填：先填带出现金（出门带的钱）、微信收款、支付宝收款、带回现金（收摊剩的钱）（现金收入 = 带回 − 带出）。带出现金可以点旁边的「单独保存」先单独记。再到「成本」一栏，每个商品后面点「改」填今天用掉/卖掉的数量，改完点「保存」，系统自动算营业额、成本、利润。成本栏默认只读锁定，改哪个点哪个的「改」（同一时刻只开一行，不误触）；框里可填总数，也可填「+5」「−3」表示加 5、减 3（改前的用量会一直显示在上方，不会忘）。进价变了，点编辑里的进价下拉选另一批进货。</p>' +
+      '<p style="margin:0 0 8px"><strong>2. 商品 / 进货 / 成本</strong><br>到「商品」添加商品：成品填进价+售价，原材料填进价、可选填「规格」（每件克重）。「库存预警线」可以按件、也可以按重量（克/斤等）设。点商品行的「进」直接在那行改数量进货（选「使用账户」现金/微信/支付宝，会自动从对应账户扣钱），不用弹窗；「卖」「用」也能直接记。成本栏会列出所有商品，填用量即按进价算成本、显示金额和剩余库存，并自动扣库存。「商品」页下方有库存预警和最近流水。</p>' +
+      '<p style="margin:0 0 8px"><strong>3. 钱包 / 资金记录</strong><br>「钱包」页把现金、微信、支付宝三个账户分开记余额：收款收入进对应账户、进货从所选账户扣钱，还能「记一笔」手动记（比如初始现金）。每笔资金流水都记了操作时间（精确到秒）。</p>' +
+      '<p style="margin:0 0 8px"><strong>4. 利润 / 统计</strong><br>利润 = 营业额 − 成本。营业额 = 微信 + 支付宝 + 现金，首页填完实时显示。记错了到「商品」页下方的「最近流水」点「删」（或「查看全部」）撤销，进货/卖货/消耗的库存会自动改回去；点任意一行流水还能看明细（进货价、规格、时间等），方便核对。「统计」里看每天的营业额、成本、利润趋势，以及「卖得最好的商品」。</p>' +
+      '<p style="margin:0 0 8px"><strong>5. 两台手机同步</strong><br>手机A「设置 → 导出备份」得到一个文件 → 用微信发给手机B。手机B在微信里点开文件 → 右上角「…」→「保存到手机」→ 存到「下载 / Download」文件夹，再回本 app「设置 → 导入备份」选它。</p>' +
+      '<p style="margin:0 0 8px"><strong>5.1 小米等手机「导入」点不动怎么办</strong><br>桌面图标那个窗口限制多，选文件用不了。用手机自带浏览器打开 liaootto.github.io/baitan 再导入即可——数据是和图标共用的，导完回去看都一样。实在不行再用「粘贴备份内容（备用）」：把备份文字的「显示备份文字」复制过来粘贴。</p>' +
+      '<p style="margin:0 0 8px"><strong>6. 备份</strong><br>数据只存在本机，建议定期导出备份存到微信收藏或云盘，防止换手机或误删。</p>' +
+      '<p style="margin:0"><strong>7. 密码</strong><br>在「设置 → 设置密码」可加一把打开密码。</p>' +
+      '</div>'
     );
   }
 
